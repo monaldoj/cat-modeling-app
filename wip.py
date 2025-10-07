@@ -188,65 +188,26 @@ def get_event_details(event_name):
             # print(catalogs)
         return event_details
 
-# def get_catalogs():
-#     DATABRICKS_SERVER_HOSTNAME = get_databricks_server_hostname()
-#     DATABRICKS_TOKEN = get_databricks_token()
-#     with sql.connect(
-#         http_path=f"/sql/1.0/warehouses/{DATABRICKS_WAREHOUSE_ID}",
-#         server_hostname=DATABRICKS_SERVER_HOSTNAME,
-#         access_token=DATABRICKS_TOKEN
-#     ) as connection:
-#         with connection.cursor() as cursor:
-#             cursor.execute("SHOW CATALOGS")
-#             catalogs = cursor.fetchall()
-#             catalogs = [catalog.catalog for catalog in catalogs]
-#             # print(catalogs)
-#         return catalogs
-    
-# def get_schemas(catalog):
-#     DATABRICKS_SERVER_HOSTNAME = get_databricks_server_hostname()
-#     DATABRICKS_TOKEN = get_databricks_token()
-#     with sql.connect(
-#         http_path=f"/sql/1.0/warehouses/{DATABRICKS_WAREHOUSE_ID}",
-#         server_hostname=DATABRICKS_SERVER_HOSTNAME,
-#         access_token=DATABRICKS_TOKEN
-#     ) as connection:
-#         with connection.cursor() as cursor:
-#             cursor.execute(f"SHOW SCHEMAS IN {catalog}")
-#             schemas = cursor.fetchall()
-#             schemas = [schema.databaseName for schema in schemas]
-#             print(f"SCHEMAS in {catalog}: {schemas}")
-#         return schemas
-
-# def get_tables(catalog, schema):
-#     DATABRICKS_SERVER_HOSTNAME = get_databricks_server_hostname()
-#     DATABRICKS_TOKEN = get_databricks_token()
-#     with sql.connect(
-#         http_path=f"/sql/1.0/warehouses/{DATABRICKS_WAREHOUSE_ID}",
-#         server_hostname=DATABRICKS_SERVER_HOSTNAME,
-#         access_token=DATABRICKS_TOKEN
-#     ) as connection:
-#         with connection.cursor() as cursor: 
-#             cursor.execute(f"SHOW TABLES IN {catalog}.{schema}")
-#             tables = cursor.fetchall()
-#             tables = [table.tableName for table in tables]
-#             print(f"TABLES IN {catalog}.{schema}: {tables}")
-#         return tables
-
-# def get_columns(catalog, schema, table):
-#     DATABRICKS_SERVER_HOSTNAME = get_databricks_server_hostname()
-#     DATABRICKS_TOKEN = get_databricks_token()
-#     with sql.connect(
-#         http_path=f"/sql/1.0/warehouses/{DATABRICKS_WAREHOUSE_ID}",
-#         server_hostname=DATABRICKS_SERVER_HOSTNAME,
-#         access_token=DATABRICKS_TOKEN
-#     ) as connection:
-#         with connection.cursor() as cursor:
-#             cursor.execute(f"SHOW COLUMNS IN {catalog}.{schema}.{table}")
-#             columns = cursor.fetchall()
-#             columns = [col.col_name for col in columns]
-#             print(f"COLUMNS IN {catalog}.{schema}.{table}: {columns}")
-#         return columns
+def get_affected_portfolios(event_name=None):
+    DATABRICKS_SERVER_HOSTNAME = get_databricks_server_hostname()
+    DATABRICKS_TOKEN = get_databricks_token()
+    with sql.connect(
+        http_path=f"/sql/1.0/warehouses/{DATABRICKS_WAREHOUSE_ID}",
+        server_hostname=DATABRICKS_SERVER_HOSTNAME,
+        access_token=DATABRICKS_TOKEN
+    ) as connection:
+        with connection.cursor() as cursor:
+            event_wkt = get_event_details(event_name)
+            query = f"""
+                SELECT id, property_value, name, lat, lon, housenumber, city, state, postcode
+                FROM timo.cat_risk.portfolio
+                WHERE ST_CONTAINS(ST_GEOMFROMTEXT('{event_wkt}'), ST_POINT(lon, lat))
+            """
+            cursor.execute(query)
+            results = cursor.fetchall()
+            columns = [desc[0] for desc in cursor.description]
+            df = pd.DataFrame(results, columns=columns)
+        return df
 
 def style_function(value, deciles):
     fill_color = '#FFFFFF'  # default white
@@ -483,15 +444,7 @@ def data_to_polygons(map_data):
         hex_boundaries_geojson['features'].append(hex_boundary_element)
 
         style = style_function(map_data.iloc[i]['value'].item(), deciles)
-        # dlPolygons.append(
-        # {
-        #     "positions": hex_boundaries_polygon,
-        #     "fillColor": style['fillColor'],
-        #     "color": style['color'],
-        #     "weight": style['weight'],
-        #     "opacity": style['opacity'],
-        #     "fillOpacity": style['fillOpacity']
-        # })
+
         dlPolygons.append(dl.Polygon(
             positions=hex_boundaries_polygon,
             fillColor=style['fillColor'],
@@ -507,114 +460,6 @@ def data_to_polygons(map_data):
     # for i in range(len(map_data)):
     #     polygons.append(dl.Polygon(positions=map_data.iloc[i]['hex_boundary'], color="#39FF14", fillOpacity=0.04))
     # return polygons
-
-# def create_leaflet_map(map_data, zoom=None, center=None, bounds=None):
-#     """Create a Leaflet map component with the hexagon data"""
-#     print("creating leaflet map")
-    
-#     children = [
-#         dl.TileLayer(url=tile_layer_url, attribution='© Mapbox © OpenStreetMap')
-#     ]
-
-#     map_component = dl.Map(
-#         children,
-#         trackViewport=True,
-#         bounds=bounds,
-#         style={"width": "100%", "height": "100vh"},
-#         id="map-container"
-#     )
-
-
-
-
-
-
-#     septiles = create_linear_color_scale(map_data['count']) if len(map_data) > 0 else range(1, 8)
-#     print('septiles', [int(x) for x in septiles])
-#     legend = create_legend(septiles)
-
-#     hex_centers_lats = []
-#     hex_centers_lngs = []
-#     hex_boundaries_polygons = []
-#     hex_boundaries_geojson = {
-#         "type": "FeatureCollection",
-#         "features": []
-#     }
-#     dlPolygons = []
-#     for i in range(len(map_data)):
-#         hex_boundaries_polygon = [[coord[1], coord[0]] for coord in json.loads(map_data.iloc[i]['hex_boundary'])['coordinates'][0]]
-#         hex_boundaries_polygons.append(hex_boundaries_polygon)
-        
-#         hex_boundary_element = {'type': 'Feature'}
-#         hex_boundary_element['geometry'] = json.loads(map_data.iloc[i]['hex_boundary'])
-#         hex_centers_lats.append(json.loads(map_data.iloc[i]['hex_boundary'])['coordinates'][0][0][1])
-#         hex_centers_lngs.append(json.loads(map_data.iloc[i]['hex_boundary'])['coordinates'][0][0][0])
-#         hex_boundary_element['properties'] = {
-#             'count': map_data.iloc[i]['count'].item(),
-#             'color': style_function(map_data.iloc[i]['count'].item(), septiles)
-#         }
-#         hex_boundaries_geojson['features'].append(hex_boundary_element)
-
-#         style = style_function(map_data.iloc[i]['count'].item(), septiles)
-#         dlPolygons.append(
-#         {
-#             "positions": hex_boundaries_polygon,
-#             "fillColor": style['fillColor'],
-#             "color": style['color'],
-#             "weight": style['weight'],
-#             "opacity": style['opacity'],
-#             "fillOpacity": style['fillOpacity']
-#         })
-#         # print(dlPolygons)
-#     if wkt:
-#         dlPolygons.append(
-#             {
-#                 "positions": wkt_to_geojson(wkt[0])['geometry']['coordinates'][0],
-#                 "fillColor": "#39FF14",  # neon yellow-green
-#                 "color": "#39FF14",
-#             }
-#         )
-
-#     center_lat = sum(hex_centers_lats[:10]) / len(hex_centers_lats[:10]) if center is None else center['lat']
-#     center_lng = sum(hex_centers_lngs[:10]) / len(hex_centers_lngs[:10]) if center is None else center['lng']
-#     zoom = zoom if zoom is not None else 11
-#     print(f"center_lat: {center_lat}, center_lng: {center_lng}")
-
-#     # tile_layer_url = "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-#     tile_layer_url = "http://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png"
-    
-#     children = [
-#         dl.TileLayer(url=tile_layer_url, attribution='© Mapbox © OpenStreetMap')
-#     ]
-#     for dlP in dlPolygons:
-#         children.append(dl.Polygon(**dlP))
-    
-#     if bounds:
-#         map_component = dl.Map(
-#             children,
-#             trackViewport=True,
-#             bounds=bounds,
-#             style={"width": "100%", "height": "100vh"},
-#             id="map-container"
-#         )  
-#     else:
-#         map_component = dl.Map(
-#             children,
-#             trackViewport=True,
-#             center=[center_lat, center_lng], 
-#             zoom=zoom, 
-#             style={"width": "100%", "height": "100vh"},
-#             id="map-container"
-#         )
-    
-#     return map_component, legend
-
-# Get initial data
-# print("getting data")
-# load_defaults = True
-
-# map_data = get_data(catastrophe_type=default_catastrophe_type, bounds=None, resolution=8)
-# leaflet_map, legend = create_leaflet_map(map_data, zoom=5, center={'lat': 38.7946, 'lng': -106.5348})
 
 app.layout = html.Div(
     [
@@ -727,29 +572,87 @@ app.layout = html.Div(
                 "boxShadow": "0 2px 4px rgba(0,0,0,0.3)"
             }
         ),
-        dcc.Loading(
-            children=[
-                dl.Map(
+        # Two column layout for map and portfolio list
+        html.Div(
+            [
+                # Left column - Map (75%)
+                html.Div(
                     [
-                        dl.TileLayer(url=tile_layer_url, attribution='© Mapbox © OpenStreetMap'),
-                        dl.LayerGroup(id="map-polygons", children=[]) #dl.Polygon(color='#39FF14', positions=[[25.2, -81.6], [25.2, -79.8], [26.6, -79.8], [26.6, -81.6]])])
-                        # dl.Polygon(color='#39FF14', positions=[[25.2, -81.6], [25.2, -79.8], [26.6, -79.8], [26.6, -81.6]])
+                        dcc.Loading(
+                            children=[
+                                dl.Map(
+                                    [
+                                        dl.TileLayer(url=tile_layer_url, attribution='© Mapbox © OpenStreetMap'),
+                                        dl.LayerGroup(id="map-polygons", children=[]) #dl.Polygon(color='#39FF14', positions=[[25.2, -81.6], [25.2, -79.8], [26.6, -79.8], [26.6, -81.6]])])
+                                        # dl.Polygon(color='#39FF14', positions=[[25.2, -81.6], [25.2, -79.8], [26.6, -79.8], [26.6, -81.6]])
+                                    ],
+                                    center=[39.8283, -98.5795],
+                                    zoom=5,
+                                    trackViewport=True,
+                                    zoomControl=False,
+                                    # bounds=bounds,
+                                    style={"width": "100%", "height": "100vh"},
+                                    id="map"
+                                ),
+                                # html.Div(id="map-container", children=leaflet_map),
+                                html.Div(id="legend-container", children=legend)
+                            ],
+                            id='loading-map',
+                            type='default',
+                            color='#3A3A3A',
+                            overlay_style={"visibility":"visible", "filter": "blur(3px)"},
+                        ),
                     ],
-                    center=[39.8283, -98.5795],
-                    zoom=5,
-                    trackViewport=True,
-                    zoomControl=False,
-                    # bounds=bounds,
-                    style={"width": "100%", "height": "100vh"},
-                    id="map"
+                    style={"width": "75%", "display": "inline-block", "verticalAlign": "top"}
                 ),
-                # html.Div(id="map-container", children=leaflet_map),
-                html.Div(id="legend-container", children=legend)
+                # Right column - Portfolio List (25%)
+                html.Div(
+                    [
+                        html.Div(
+                            [
+                                html.H4("Affected Portfolios", 
+                                       style={
+                                           "color": "#FFFFFF", 
+                                           "fontFamily": "Helvetica", 
+                                           "fontWeight": "bold",
+                                           "marginBottom": "15px",
+                                           "textAlign": "center"
+                                       }),
+                                html.Div(id="portfolio-count",
+                                        style={
+                                            "color": "#CCCCCC",
+                                            "fontFamily": "Helvetica",
+                                            "fontSize": "12px",
+                                            "marginBottom": "10px",
+                                            "textAlign": "center"
+                                        }),
+                                dcc.Loading(
+                                    id="loading-portfolios",
+                                    type="circle",
+                                    children=html.Div(
+                                        id="portfolio-list",
+                                        style={
+                                            "maxHeight": "calc(100vh - 150px)",
+                                            "overflowY": "auto",
+                                            "overflowX": "hidden"
+                                        }
+                                    ),
+                                    color="#FFFFFF"
+                                )
+                            ],
+                            style={
+                                "backgroundColor": "#3A3A3A",
+                                "padding": "15px",
+                                "borderRadius": "8px",
+                                "boxShadow": "0 2px 4px rgba(0,0,0,0.3)",
+                                "height": "100vh"
+                            }
+                        )
+                    ],
+                    style={"width": "25%", "display": "inline-block", "verticalAlign": "top"}
+                ),
             ],
-            id='loading-map',
-            type='default',
-            color='#3A3A3A',
-            overlay_style={"visibility":"visible", "filter": "blur(3px)"},
+            style={"display": "flex", "width": "100%"}
         ),
     ],
     style={"backgroundColor": "#29323C"},
@@ -953,6 +856,127 @@ def flyto_event(event_name, children):
     else:
         return dict(bounds=global_bounds), children
 
+# Callback to populate portfolio list when event is selected
+@app.callback(
+    [Output('portfolio-list', 'children'),
+     Output('portfolio-count', 'children')],
+    [Input('event-dropdown', 'value')],
+    prevent_initial_call=True
+)
+def update_portfolio_list(event_name):
+    """Update the portfolio list when an event is selected"""
+    if event_name is None:
+        return html.Div(
+            "Select an event to view affected portfolios",
+            style={
+                "color": "#CCCCCC",
+                "fontFamily": "Helvetica",
+                "fontSize": "14px",
+                "textAlign": "center",
+                "padding": "20px"
+            }
+        ), ""
+    
+    try:
+        # Fetch portfolios affected by the event
+        portfolios_df = get_affected_portfolios(event_name)
+        
+        if portfolios_df.empty:
+            return html.Div(
+                "No portfolios found in this event area",
+                style={
+                    "color": "#CCCCCC",
+                    "fontFamily": "Helvetica",
+                    "fontSize": "14px",
+                    "textAlign": "center",
+                    "padding": "20px"
+                }
+            ), "0 portfolios"
+        
+        # Create portfolio cards
+        portfolio_cards = []
+        for idx, row in portfolios_df.iterrows():
+            card = html.Div(
+                [
+                    html.Div(
+                        [
+                            html.Div(
+                                [
+                                    html.Strong("ID: ", style={"color": "#FFFFFF"}),
+                                    html.Span(str(row['id']), style={"color": "#CCCCCC"})
+                                ],
+                                style={"marginBottom": "5px"}
+                            ),
+                            html.Div(
+                                [
+                                    html.Strong("Property Value: ", style={"color": "#FFFFFF"}),
+                                    html.Span(f"${row['property_value']:,.2f}" if pd.notna(row['property_value']) else "N/A", 
+                                             style={"color": "#4CAF50", "fontWeight": "bold"})
+                                ],
+                                style={"marginBottom": "5px"}
+                            ),
+                            html.Div(
+                                [
+                                    html.Strong("Name: ", style={"color": "#FFFFFF"}),
+                                    html.Span(str(row['name']) if pd.notna(row['name']) else "N/A", 
+                                             style={"color": "#CCCCCC"})
+                                ],
+                                style={"marginBottom": "5px"}
+                            ),
+                            html.Div(
+                                [
+                                    html.Strong("Address: ", style={"color": "#FFFFFF"}),
+                                    html.Span(
+                                        f"{row['housenumber'] if pd.notna(row['housenumber']) else ''} "
+                                        f"{row['city'] if pd.notna(row['city']) else ''}, "
+                                        f"{row['state'] if pd.notna(row['state']) else ''} "
+                                        f"{row['postcode'] if pd.notna(row['postcode']) else ''}",
+                                        style={"color": "#CCCCCC"}
+                                    )
+                                ],
+                                style={"marginBottom": "5px"}
+                            ),
+                            html.Div(
+                                [
+                                    html.Strong("Coordinates: ", style={"color": "#FFFFFF"}),
+                                    html.Span(
+                                        f"({row['lat']:.4f}, {row['lon']:.4f})",
+                                        style={"color": "#CCCCCC", "fontSize": "11px"}
+                                    )
+                                ],
+                                style={"marginBottom": "0px"}
+                            ),
+                        ]
+                    )
+                ],
+                style={
+                    "backgroundColor": "#2C2C2C",
+                    "padding": "12px",
+                    "marginBottom": "10px",
+                    "borderRadius": "6px",
+                    "border": "1px solid #4A4A4A",
+                    "fontFamily": "Helvetica",
+                    "fontSize": "12px"
+                }
+            )
+            portfolio_cards.append(card)
+        
+        count_text = f"{len(portfolios_df):,} portfolio{'s' if len(portfolios_df) != 1 else ''} affected"
+        
+        return html.Div(portfolio_cards), count_text
+        
+    except Exception as e:
+        print(f"Error fetching portfolios: {e}")
+        return html.Div(
+            f"Error loading portfolios: {str(e)}",
+            style={
+                "color": "#FF6B6B",
+                "fontFamily": "Helvetica",
+                "fontSize": "14px",
+                "textAlign": "center",
+                "padding": "20px"
+            }
+        ), "Error"
         
     # except Exception as e:
     #     print(f"Error fetching events: {e}")
