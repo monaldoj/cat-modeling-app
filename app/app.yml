@@ -1,0 +1,9 @@
+command: [
+  "python",
+  "app.py"
+]
+env:
+- name: "DATABRICKS_WAREHOUSE_ID"
+  valueFrom: "sql-warehouse"
+# - name: "DATABRICKS_TOKEN"
+#   valueFrom: "DATABRICKS_TOKEN"

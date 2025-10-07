@@ -1,0 +1,14 @@
+# This is a Databricks asset bundle definition for geospatial_viz_app_leaflet.
+# See https://docs.databricks.com/dev-tools/bundles/index.html for documentation.
+bundle:
+  name: cat-modeling-app
+
+include:
+  - resources/*.yml
+
+targets:
+  dev:
+    mode: development
+    default: true
+  prod:
+    mode: production

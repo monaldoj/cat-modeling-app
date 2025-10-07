@@ -1,0 +1,16 @@
+resources:
+  apps:
+    cat-modeling-app:
+      name: "cat-modeling-app"
+      source_code_path: ../app
+      description: "A leaflet app for modeling catastrophies geopsatially on Databricks."
+      # budget_policy_id: "4635ae18-e8d8-4528-98d3-05805c7e6308" #"${var.budget_policy_id}"
+      resources:
+        - name: "sql-warehouse"
+          description: "A SQL warehouse for app to be able to work with"
+          sql_warehouse:
+            id: "d6d89fb9fd47b835" # "${var.sql_warehouse_id}"
+            permission: "CAN_USE"
+      user_api_scopes:
+        - sql
+
