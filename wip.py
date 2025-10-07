@@ -199,7 +199,7 @@ def get_affected_portfolios(event_name=None):
         with connection.cursor() as cursor:
             event_wkt = get_event_details(event_name)
             query = f"""
-                SELECT id, property_value, name, lat, lon, housenumber, city, state, postcode
+                SELECT id, property_value, name, lat, lon, housenumber, street, city, state, postcode
                 FROM timo.cat_risk.portfolio
                 WHERE ST_CONTAINS(ST_GEOMFROMTEXT('{event_wkt}'), ST_POINT(lon, lat))
             """
@@ -539,30 +539,6 @@ app.layout = html.Div(
                     ],
                     style={"display": "inline-block", "marginRight": "20px", "alignItems": "stretch"}
                 ),
-                html.Div(
-                    [
-                        dbc.Button(
-                            "Refresh Map",
-                            id="refresh-button",
-                            className="refresh-button",
-                            disabled=False,
-                            style={
-                                "backgroundColor": "#3A3A3A",
-                                "color": "#FFFFFF",
-                                "cursor": "pointer",
-                                "borderRadius": "4px",
-                                "fontSize": "14px",
-                                "fontFamily": "Helvetica",
-                                "fontWeight": "bold",
-                                "width": "150px",
-                                "height": "35px",
-                                "border": "1px solid #FFFFFF",
-                                "marginTop": "20px"
-                            }
-                        )
-                    ],
-                    style={"display": "inline-block", "marginRight": "0px", "float": "right"}
-                ),
             ],
             style={
                 "backgroundColor": "#3A3A3A",
@@ -578,6 +554,35 @@ app.layout = html.Div(
                 # Left column - Map (75%)
                 html.Div(
                     [
+                        # Refresh button positioned above map's upper right corner
+                        html.Div(
+                            [
+                                dbc.Button(
+                                    "Refresh Map",
+                                    id="refresh-button",
+                                    className="refresh-button",
+                                    disabled=False,
+                                    style={
+                                        "backgroundColor": "#3A3A3A",
+                                        "color": "#FFFFFF",
+                                        "cursor": "pointer",
+                                        "borderRadius": "4px",
+                                        "fontSize": "14px",
+                                        "fontFamily": "Helvetica",
+                                        "fontWeight": "bold",
+                                        "width": "150px",
+                                        "height": "35px",
+                                        "border": "1px solid #FFFFFF",
+                                    }
+                                )
+                            ],
+                            style={
+                                "position": "absolute",
+                                "top": "-50px",
+                                "right": "10px",
+                                "zIndex": "1000"
+                            }
+                        ),
                         dcc.Loading(
                             children=[
                                 dl.Map(
@@ -603,7 +608,7 @@ app.layout = html.Div(
                             overlay_style={"visibility":"visible", "filter": "blur(3px)"},
                         ),
                     ],
-                    style={"width": "75%", "display": "inline-block", "verticalAlign": "top"}
+                    style={"width": "75%", "display": "inline-block", "verticalAlign": "top", "position": "relative"}
                 ),
                 # Right column - Portfolio List (25%)
                 html.Div(
@@ -702,8 +707,7 @@ def update_map(n_clicks, center, zoom, bounds, catastrophe_type, event_name, chi
         "fontWeight": "bold",
         "width": "150px",
         "height": "35px",
-        "border": "1px solid #FFFFFF",
-        "marginTop": "20px"
+        "border": "1px solid #FFFFFF"
     }
     
     if n_clicks is None:
@@ -778,7 +782,6 @@ def update_button_style_on_click(n_clicks):
             "width": "150px",
             "height": "35px",
             "border": "1px solid #999999",
-            "marginTop": "20px",
             "opacity": "0.6"
         }
         return inactive_style
@@ -794,8 +797,7 @@ def update_button_style_on_click(n_clicks):
         "fontWeight": "bold",
         "width": "150px",
         "height": "35px",
-        "border": "1px solid #FFFFFF",
-        "marginTop": "20px"
+        "border": "1px solid #FFFFFF"
     }
 
 # Callback to populate catalog dropdown on app load
@@ -928,6 +930,7 @@ def update_portfolio_list(event_name):
                                     html.Strong("Address: ", style={"color": "#FFFFFF"}),
                                     html.Span(
                                         f"{row['housenumber'] if pd.notna(row['housenumber']) else ''} "
+                                        f"{row['street'] if pd.notna(row['street']) else ''} "
                                         f"{row['city'] if pd.notna(row['city']) else ''}, "
                                         f"{row['state'] if pd.notna(row['state']) else ''} "
                                         f"{row['postcode'] if pd.notna(row['postcode']) else ''}",
