@@ -199,7 +199,7 @@ def get_affected_portfolios(event_name=None):
         with connection.cursor() as cursor:
             event_wkt = get_event_details(event_name)
             query = f"""
-                SELECT id, property_value, name, lat, lon, housenumber, street, city, state, postcode
+                SELECT portfolio_id, id as property_id, property_value, name, lat, lon, housenumber, street, city, state, postcode
                 FROM timo.cat_risk.portfolio
                 WHERE ST_CONTAINS(ST_GEOMFROMTEXT('{event_wkt}'), ST_POINT(lon, lat))
             """
@@ -446,6 +446,7 @@ def data_to_polygons(map_data):
         style = style_function(map_data.iloc[i]['value'].item(), deciles)
 
         dlPolygons.append(dl.Polygon(
+            id="hex-polygon", #{"type": "hex-polygon"},
             positions=hex_boundaries_polygon,
             fillColor=style['fillColor'],
             color=style['color'],
@@ -743,9 +744,30 @@ def update_map(n_clicks, center, zoom, bounds, catastrophe_type, event_name, chi
         
         new_polygons = data_to_polygons(new_map_data)
 
-        # Keep event polygon in children
-        filtered_children = [x for x in children if 'id' in x['props'] and x["props"]["id"] == 'event-polygon']
+        # Keep event polygon and portfolio markers in children
+        filtered_children = [x for x in children 
+                           if 'id' in x['props'] 
+                           and (x['props']['id'] == 'event-polygon' or x['props']['id']['type'] == 'portfolio-marker')]
         polygons = new_polygons + filtered_children
+
+        print(f"Polygons: {polygons}")
+        
+        # def sort_key(x):
+        #     id_val = x['props']['id']  
+        #     # Hex polygons: dict with type == 'hex-polygon'
+        #     if id_val == 'hex-polygon':
+        #         return (0, 0)
+        #     # Event polygon: string == 'event-polygon'
+        #     elif id_val == 'event-polygon':
+        #         return (1, 0)
+        #     # Portfolio marker: dict with type == 'portfolio-marker'
+        #     elif isinstance(id_val, dict) and id_val.get('type') == 'portfolio-marker':
+        #         return (2, 0)
+        #     # Fallback: put at end
+        #     return (3, 0)
+
+        # polygons = sorted(polygons, key=sort_key)
+
 
         # event_polygon = []
         # if event_name:
@@ -907,8 +929,15 @@ def update_portfolio_list_and_markers(event_name, children):
                         [
                             html.Div(
                                 [
-                                    html.Strong("ID: ", style={"color": "#FFFFFF"}),
-                                    html.Span(str(row['id']), style={"color": "#CCCCCC"})
+                                    html.Strong("Portfolio ID: ", style={"color": "#FFFFFF"}),
+                                    html.Span(str(row['portfolio_id']), style={"color": "#CCCCCC"})
+                                ],
+                                style={"marginBottom": "5px"}
+                            ),
+                            html.Div(
+                                [
+                                    html.Strong("Property ID: ", style={"color": "#FFFFFF"}),
+                                    html.Span(str(row['property_id']), style={"color": "#CCCCCC"})
                                 ],
                                 style={"marginBottom": "5px"}
                             ),
@@ -955,7 +984,7 @@ def update_portfolio_list_and_markers(event_name, children):
                         ]
                     )
                 ],
-                id={"type": "portfolio-card", "index": str(row['id'])},
+                id={"type": "portfolio-card", "index": str(row['property_id'])},
                 n_clicks=0,
                 className="portfolio-card",
                 style={
@@ -995,18 +1024,21 @@ def update_portfolio_list_and_markers(event_name, children):
         for idx, row in portfolios_df.iterrows():
             # Create a marker with a unique ID
             marker = dl.CircleMarker(
-                id={"type": "portfolio-marker", "index": str(row['id'])},
+                id={"type": "portfolio-marker", "index": str(row['property_id'])},
                 center=[row['lat'], row['lon']],
                 radius=8,
-                color="#FF0000",
-                fillColor="#FF4444",
-                fillOpacity=0.8,
-                weight=2,
+                pathOptions={
+                    "color": "#3A3A3A",
+                    "fillColor": "#FF4444",
+                    "fillOpacity": 0.8,
+                    "weight": 2
+                },
                 n_clicks=0,
                 children=[
                     dl.Tooltip(
                         children=html.Div([
-                            html.Strong(f"ID: {row['id']}", style={"display": "block", "marginBottom": "5px"}),
+                            html.Strong(f"Portfolio ID: {row['portfolio_id']}", style={"display": "block", "marginBottom": "5px"}),
+                            html.Strong(f"Property ID: {row['property_id']}", style={"display": "block", "marginBottom": "5px"}),
                             html.Span(f"Value: ${row['property_value']:,.2f}" if pd.notna(row['property_value']) else "Value: N/A", 
                                      style={"display": "block", "marginBottom": "3px"}),
                             html.Span(str(row['name']) if pd.notna(row['name']) else "", 
@@ -1255,10 +1287,7 @@ def update_card_style(clicked_portfolio, card_id):
 # Callback to update marker styles based on clicked portfolio
 # This only updates visual styling - NO data reload
 @app.callback(
-    [Output({"type": "portfolio-marker", "index": dash.dependencies.MATCH}, "color"),
-     Output({"type": "portfolio-marker", "index": dash.dependencies.MATCH}, "fillColor"),
-     Output({"type": "portfolio-marker", "index": dash.dependencies.MATCH}, "fillOpacity"),
-     Output({"type": "portfolio-marker", "index": dash.dependencies.MATCH}, "weight"),
+    [Output({"type": "portfolio-marker", "index": dash.dependencies.MATCH}, "pathOptions"),
      Output({"type": "portfolio-marker", "index": dash.dependencies.MATCH}, "radius")],
     [Input('clicked-portfolio', 'data')],
     [State({"type": "portfolio-marker", "index": dash.dependencies.MATCH}, "id")],
@@ -1269,11 +1298,23 @@ def update_marker_style(clicked_portfolio, marker_id):
     portfolio_id = marker_id['index']
     
     if clicked_portfolio == portfolio_id:
-        # Highlighted style when clicked - green and larger
-        return "#4CAF50", "#4CAF50", 1.0, 4, 10
+        # Highlighted style when clicked - green color matching the card border
+        path_options = {
+            "color": "#3A3A3A",
+            "fillColor": "#4CAF50",
+            "fillOpacity": 0.5,
+            "weight": 3
+        }
+        return path_options, 16
     
     # Default style - red
-    return "#FF0000", "#FF4444", 0.8, 2, 8
+    path_options = {
+        "color": "#3A3A3A",
+        "fillColor": "#FF4444",
+        "fillOpacity": 0.5,
+        "weight": 2
+    }
+    return path_options, 8
 
 if __name__ == "__main__":
     app.run(debug=True)
