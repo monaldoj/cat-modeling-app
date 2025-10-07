@@ -55,7 +55,8 @@ global_center = None
 global_zoom = None
 global_bounds = None
 
-tile_layer_url = "http://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png"
+# tile_layer_url = "http://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png"
+tile_layer_url = "http://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png"
 
 if not DATABRICKS_WAREHOUSE_ID:
     print("Warning: DATABRICKS_WAREHOUSE_ID not set. Cannot pull data.")
@@ -747,7 +748,7 @@ app.layout = html.Div(
             ],
             id='loading-map',
             type='default',
-            color='#FFFFFF',
+            color='#3A3A3A',
             overlay_style={"visibility":"visible", "filter": "blur(3px)"},
         ),
     ],
@@ -782,11 +783,11 @@ app.layout = html.Div(
      State("map", "bounds"),
      State("catastrophe-dropdown", "value"),
      State("event-dropdown", "value"),
-    #  State('map-polygons', 'children'),
+     State('map-polygons', 'children'),
      ],
      prevent_initial_call=True
 )
-def update_map(n_clicks, center, zoom, bounds, catastrophe_type, event_name):
+def update_map(n_clicks, center, zoom, bounds, catastrophe_type, event_name, children):
     # Define button styles
     active_style = {
         "backgroundColor": "#3A3A3A",
@@ -813,16 +814,12 @@ def update_map(n_clicks, center, zoom, bounds, catastrophe_type, event_name):
         global global_center
         global global_zoom
         global global_bounds
-        polygons = []
 
         # Update global variables
         global_center = center if center is not None else global_center
         global_zoom = zoom if zoom is not None else global_zoom
         global_bounds = bounds if bounds is not None else global_bounds
 
-        # column_resolution = column_description.split(";")[0].split(":")[1].strip()
-        # column_count = column_description.split(";")[1].split(":")[1].strip()
-        # print(f"Center: {center}, Zoom: {zoom}, Bounds: {bounds}, Column Resolution: {column_resolution}, Column Count: {column_count}")
         if isinstance(global_center, list):
             global_center = {'lat': global_center[0], 'lng': global_center[1]}
         print(f"Global Center: {global_center}, Global Zoom: {global_zoom}, Global Bounds: {global_bounds}")
@@ -834,17 +831,21 @@ def update_map(n_clicks, center, zoom, bounds, catastrophe_type, event_name):
         
         new_polygons = data_to_polygons(new_map_data)
 
-        event_polygon = []
-        if event_name:
-            event_wkt = get_event_details(event_name)
-            event_polygon = [list([coord[1], coord[0]]) for coord in wkt_to_geojson(event_wkt)['coordinates'][0]][:-1]
-            # print(f"Event Polygon: {event_polygon}")
-            # print(f"Global Bounds: {global_bounds}")
-            event_polygon = polygon_clip_to_bounds(event_polygon, global_bounds)
-            # print(f"Event Polygon Clipped to Bounds: {event_polygon}")
-            event_polygon = [dl.Polygon(positions=event_polygon, color="#39FF14", fillOpacity=0.04)]
+        # Keep event polygon in children
+        filtered_children = [x for x in children if 'id' in x['props'] and x["props"]["id"] == 'event-polygon']
+        polygons = new_polygons + filtered_children
+
+        # event_polygon = []
+        # if event_name:
+        #     event_wkt = get_event_details(event_name)
+        #     event_polygon = [list([coord[1], coord[0]]) for coord in wkt_to_geojson(event_wkt)['coordinates'][0]][:-1]
+        #     # print(f"Event Polygon: {event_polygon}")
+        #     # print(f"Global Bounds: {global_bounds}")
+        #     event_polygon = polygon_clip_to_bounds(event_polygon, global_bounds)
+        #     # print(f"Event Polygon Clipped to Bounds: {event_polygon}")
+        #     event_polygon = [dl.Polygon(positions=event_polygon, color="#39FF14", fillOpacity=0.04)]
             
-        polygons = polygons + new_polygons + event_polygon
+        # polygons = polygons + new_polygons + event_polygon
         # print(f"Polygons: {polygons}")
         # Create new map and legend
         # new_leaflet_map, new_legend = create_leaflet_map(new_map_data, zoom=global_zoom, center=global_center, wkt=event_wkt)
@@ -934,19 +935,13 @@ def flyto_event(event_name, children):
     print(f"intial event_name: {event_name}")
 
     if event_name is not None:
-        # print(f"Event Name: {event_name}")
         event_wkt = get_event_details(event_name)
-        # print(f"Event WKT: {event_wkt}")
         flyto_bounds = wkt_to_bounds(event_wkt)
-        # print(f"Flyto Bounds: {flyto_bounds}")
         event_polygon = [list([coord[1], coord[0]]) for coord in wkt_to_geojson(event_wkt)['coordinates'][0]][:-1]
-        # print(f"Event Polygon: {event_polygon}")
         global_bounds = flyto_bounds
 
-        children = dl.Polygon(positions=event_polygon, color="#39FF14", fillOpacity=0.04)
-        # print(f"Children: {children}")
-
-        # new_data = get_data(bounds=global_bounds)
+        children = [x for x in children if 'id' not in x or x.id != 'event-polygon']
+        children.append(dl.Polygon(id="event-polygon", positions=event_polygon, color="#39FF14", fillOpacity=0.05))
 
         return dict(
             bounds=global_bounds,
