@@ -940,14 +940,16 @@ def flyto_event(event_name, children):
         event_polygon = [list([coord[1], coord[0]]) for coord in wkt_to_geojson(event_wkt)['coordinates'][0]][:-1]
         global_bounds = flyto_bounds
 
-        children = [x for x in children if 'id' not in x or x.id != 'event-polygon']
-        children.append(dl.Polygon(id="event-polygon", positions=event_polygon, color="#39FF14", fillOpacity=0.05))
+        # children = [x for x in children if 'id' not in x or x.id != 'event-polygon']
+        filtered_children = [x for x in children if 'id' not in x['props'] or x["props"]["id"] != 'event-polygon']
+        print(f"flyto filtered children: {filtered_children}")
+        filtered_children.append(dl.Polygon(id="event-polygon", positions=event_polygon, color="#39FF14", fillOpacity=0.05))
 
         return dict(
             bounds=global_bounds,
             transition="flyTo",
             duration=3000
-        ), children
+        ), filtered_children
     else:
         return dict(bounds=global_bounds), children
 
