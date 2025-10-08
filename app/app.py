@@ -446,7 +446,7 @@ def data_to_polygons(map_data):
         style = style_function(map_data.iloc[i]['value'].item(), deciles)
 
         dlPolygons.append(dl.Polygon(
-            id="hex-polygon", #{"type": "hex-polygon"},
+            id={"type": "hex-polygon", "index": "hex-polygon-" + str(i)},
             positions=hex_boundaries_polygon,
             fillColor=style['fillColor'],
             color=style['color'],
@@ -746,16 +746,15 @@ def update_map(n_clicks, center, zoom, bounds, catastrophe_type, event_name, chi
 
         # Keep event polygon and portfolio markers in children
         filtered_children = [x for x in children 
-                           if 'id' in x['props'] 
-                           and (x['props']['id'] == 'event-polygon' or x['props']['id']['type'] == 'portfolio-marker')]
+                           if 'id' in x.get('props', {}) 
+                           and (isinstance(x['props']['id'], dict) 
+                                and x['props']['id'].get('type') in ['event-polygon', 'portfolio-marker'])]
         polygons = new_polygons + filtered_children
-
-        print(f"Polygons: {polygons}")
-        
+        # # INSERT_YOUR_CODE
         # def sort_key(x):
-        #     id_val = x['props']['id']  
+        #     id_val = x.get('props', {}).get('id')
         #     # Hex polygons: dict with type == 'hex-polygon'
-        #     if id_val == 'hex-polygon':
+        #     if isinstance(id_val, dict) and id_val.get('type') == 'hex-polygon':
         #         return (0, 0)
         #     # Event polygon: string == 'event-polygon'
         #     elif id_val == 'event-polygon':
@@ -765,7 +764,6 @@ def update_map(n_clicks, center, zoom, bounds, catastrophe_type, event_name, chi
         #         return (2, 0)
         #     # Fallback: put at end
         #     return (3, 0)
-
         # polygons = sorted(polygons, key=sort_key)
 
 
@@ -1011,13 +1009,17 @@ def update_portfolio_list_and_markers(event_name, children):
         
         # Create markers for portfolios
         # Filter out any existing portfolio markers and event polygon
+        # filtered_children = [x for x in children 
+        #                    if 'id' not in x.get('props', {}) 
+        #                    or (not str(x['props']['id']).startswith('portfolio-marker-') 
+        #                        and x['props']['id'] != 'event-polygon')]
         filtered_children = [x for x in children 
-                           if 'id' not in x.get('props', {}) 
-                           or (not str(x['props']['id']).startswith('portfolio-marker-') 
-                               and x['props']['id'] != 'event-polygon')]
+                           if 'id' in x.get('props', {}) 
+                           and (isinstance(x['props']['id'], dict) 
+                                and x['props']['id'].get('type') in ['hex-polygon'])]
         
         # Add event polygon
-        event_polygon_element = dl.Polygon(id="event-polygon", positions=event_polygon, color="#39FF14", fillOpacity=0.05)
+        event_polygon_element = dl.Polygon(id={"type": "event-polygon", "index": "event-polygon-1"}, positions=event_polygon, color="#39FF14", fillOpacity=0.05)
         
         # Add new portfolio markers with CircleMarker for better interactivity
         portfolio_markers = []
