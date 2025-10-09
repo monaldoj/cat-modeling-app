@@ -17,6 +17,9 @@ from dash_extensions.enrich import DashProxy, Input, Output, html
 import flask
 import json
 import datetime as dt
+from shapely.geometry import Polygon, Point, box
+from shapely import wkt
+from assets.svg_icons import svg_pin_icon
 
 # Set up the app
 app = DashProxy(__name__)
@@ -621,7 +624,7 @@ app.layout = html.Div(
                     [
                         html.Div(
                             [
-                                html.H4("Affected Portfolios", 
+                                html.H4("Affected Properties", 
                                        style={
                                            "color": "#FFFFFF", 
                                            "fontFamily": "Helvetica", 
@@ -669,23 +672,6 @@ app.layout = html.Div(
     style={"backgroundColor": "#29323C"},
     
 )
-
-# @app.callback(
-#     [Output('map', 'children'),
-#      Output('legend-container', 'children'),
-#      Output('refresh-button', 'style')],
-#     Input('refresh-button', 'n_clicks'),
-#     [State("map", "center"),
-#      State("map", "zoom"),
-#      State("map", "bounds"),
-#      State("catastrophe-dropdown", "value"),
-#      State("event-dropdown", "value")
-#      ],
-#      prevent_initial_call=True
-# )
-
-
-
 
 # Add callback for refresh button and initial load
 @app.callback(
@@ -750,38 +736,7 @@ def update_map(n_clicks, center, zoom, bounds, catastrophe_type, event_name, chi
                            and (isinstance(x['props']['id'], dict) 
                                 and x['props']['id'].get('type') in ['event-polygon', 'portfolio-marker'])]
         polygons = new_polygons + filtered_children
-        # # INSERT_YOUR_CODE
-        # def sort_key(x):
-        #     id_val = x.get('props', {}).get('id')
-        #     # Hex polygons: dict with type == 'hex-polygon'
-        #     if isinstance(id_val, dict) and id_val.get('type') == 'hex-polygon':
-        #         return (0, 0)
-        #     # Event polygon: string == 'event-polygon'
-        #     elif id_val == 'event-polygon':
-        #         return (1, 0)
-        #     # Portfolio marker: dict with type == 'portfolio-marker'
-        #     elif isinstance(id_val, dict) and id_val.get('type') == 'portfolio-marker':
-        #         return (2, 0)
-        #     # Fallback: put at end
-        #     return (3, 0)
-        # polygons = sorted(polygons, key=sort_key)
 
-
-        # event_polygon = []
-        # if event_name:
-        #     event_wkt = get_event_details(event_name)
-        #     event_polygon = [list([coord[1], coord[0]]) for coord in wkt_to_geojson(event_wkt)['coordinates'][0]][:-1]
-        #     # print(f"Event Polygon: {event_polygon}")
-        #     # print(f"Global Bounds: {global_bounds}")
-        #     event_polygon = polygon_clip_to_bounds(event_polygon, global_bounds)
-        #     # print(f"Event Polygon Clipped to Bounds: {event_polygon}")
-        #     event_polygon = [dl.Polygon(positions=event_polygon, color="#39FF14", fillOpacity=0.04)]
-            
-        # polygons = polygons + new_polygons + event_polygon
-        # print(f"Polygons: {polygons}")
-        # Create new map and legend
-        # new_leaflet_map, new_legend = create_leaflet_map(new_map_data, zoom=global_zoom, center=global_center, wkt=event_wkt)
-        
         print("Map refreshed successfully!")
         return polygons, active_style
 
@@ -831,11 +786,11 @@ def update_button_style_on_click(n_clicks):
      Output('event-dropdown', 'placeholder'),
      Output('event-dropdown', 'disabled'),
      Output('event-dropdown', 'value')],
-    [Input('event-dropdown', 'id'),
-     Input("url", "pathname")],
+    # [Input('event-dropdown', 'id'),
+    [Input("url", "pathname")],
     prevent_initial_call=False
 )
-def populate_events(trigger, pathname):
+def populate_events(pathname):
     """Populate the catalog dropdown with available catalogs"""
     # print("Populating catalogs dropdown...")
     
@@ -850,34 +805,10 @@ def populate_events(trigger, pathname):
         print("Returning empty list")
         return [], "Select an event...", False, None
 
-# Callback to fly to event and add event polygon to map
-@app.callback(
-    Output('map', 'viewport'),
-    [Input('event-dropdown', 'value')],
-    prevent_initial_call=True,
-)
-def flyto_event(event_name):
-    """Flyto the event bounds"""
-
-    global global_bounds
-    print(f"intial event_name: {event_name}")
-
-    if event_name is not None:
-        event_wkt = get_event_details(event_name)
-        flyto_bounds = wkt_to_bounds(event_wkt)
-        global_bounds = flyto_bounds
-
-        return dict(
-            bounds=global_bounds,
-            transition="flyTo",
-            duration=3000
-        )
-    else:
-        return dict(bounds=global_bounds)
-
 # Callback to update both portfolio list and markers when event is selected
 @app.callback(
-    [Output('portfolio-list', 'children'),
+    [Output('map', 'viewport'),
+     Output('portfolio-list', 'children'),
      Output('portfolio-count', 'children'),
      Output('portfolio-data-store', 'data'),
      Output('map-polygons', 'children')],
@@ -887,8 +818,15 @@ def flyto_event(event_name):
 )
 def update_portfolio_list_and_markers(event_name, children):
     """Update the portfolio list and map markers when an event is selected"""
+    
+    stime = dt.datetime.now()
+
+    global global_bounds
+    viewport = dict(bounds=global_bounds)
+    print(f"intial event_name: {event_name}")
+
     if event_name is None:
-        return html.Div(
+        return viewport, html.Div(
             "Select an event to view affected portfolios",
             style={
                 "color": "#CCCCCC",
@@ -900,11 +838,38 @@ def update_portfolio_list_and_markers(event_name, children):
         ), "", [], children
     
     try:
+        event_wkt = get_event_details(event_name)
+        global_bounds = wkt_to_bounds(event_wkt)
+        viewport = dict(
+            bounds=global_bounds,
+            transition="flyTo",
+            duration=3000
+        )
+        event_polygon = [list([coord[1], coord[0]]) for coord in wkt_to_geojson(event_wkt)['coordinates'][0]][:-1]
+        event_polygon_element = dl.Polygon(id={"type": "event-polygon", "index": "event-polygon-1"}, positions=event_polygon, color="#39FF14", fillOpacity=0.05)
+        
+        # Filter updated_children to only include elements where x['props']['positions'] coordinates overlap with the viewport coordinates using shapely
+        viewport_filter = wkt.loads(event_wkt)
+        filtered_children = []
+        for child in children:
+            if child['props']['id']['type'] == 'hex-polygon':
+                child_polygon = Polygon([(x[1], x[0]) for x in child['props']['positions']])
+                if child_polygon.is_valid and child_polygon.intersects(viewport_filter):
+                    filtered_children.append(child)
+
+        print(f"Time taken to filter children: {dt.datetime.now() - stime}")
+        updated_children = filtered_children
+        
+        # updated_children = [x for x in children if x['props']['id']['type'] != 'event-polygon']
+        updated_children.append(event_polygon_element)
+        print(f"Time taken to create event polygon: {dt.datetime.now() - stime}")
+
         # Fetch portfolios affected by the event
         portfolios_df = get_affected_portfolios(event_name)
+        print(f"Time taken to fetch portfolios: {dt.datetime.now() - stime}")
         
         if portfolios_df.empty:
-            return html.Div(
+            return viewport, html.Div(
                 "No portfolios found in this event area",
                 style={
                     "color": "#CCCCCC",
@@ -913,7 +878,7 @@ def update_portfolio_list_and_markers(event_name, children):
                     "textAlign": "center",
                     "padding": "20px"
                 }
-            ), "0 portfolios", [], children
+            ), "0 portfolios", [], updated_children
         
         # Store portfolio data for markers
         portfolio_data = portfolios_df.to_dict('records')
@@ -1000,41 +965,16 @@ def update_portfolio_list_and_markers(event_name, children):
                 }
             )
             portfolio_cards.append(card)
+
+        print(f"Time taken to create portfolio cards: {dt.datetime.now() - stime}")
+        count_text = f"{len(portfolios_df):,} propert{'ies' if len(portfolios_df) != 1 else 'y'} affected"
         
-        count_text = f"{len(portfolios_df):,} portfolio{'s' if len(portfolios_df) != 1 else ''} affected"
-        
-        # Get event polygon to add to map
-        event_wkt = get_event_details(event_name)
-        event_polygon = [list([coord[1], coord[0]]) for coord in wkt_to_geojson(event_wkt)['coordinates'][0]][:-1]
-        
-        # Create markers for portfolios
-        # Filter out any existing portfolio markers and event polygon
-        # filtered_children = [x for x in children 
-        #                    if 'id' not in x.get('props', {}) 
-        #                    or (not str(x['props']['id']).startswith('portfolio-marker-') 
-        #                        and x['props']['id'] != 'event-polygon')]
-        filtered_children = [x for x in children 
-                           if 'id' in x.get('props', {}) 
-                           and (isinstance(x['props']['id'], dict) 
-                                and x['props']['id'].get('type') in ['hex-polygon'])]
-        
-        # Add event polygon
-        event_polygon_element = dl.Polygon(id={"type": "event-polygon", "index": "event-polygon-1"}, positions=event_polygon, color="#39FF14", fillOpacity=0.05)
-        
-        # Add new portfolio markers with CircleMarker for better interactivity
+        # Add new portfolio markers with dl.Marker for better interactivity
         portfolio_markers = []
         for idx, row in portfolios_df.iterrows():
-            # Create a marker with a unique ID
-            marker = dl.CircleMarker(
+            marker = dl.Marker(
                 id={"type": "portfolio-marker", "index": str(row['property_id'])},
-                center=[row['lat'], row['lon']],
-                radius=8,
-                pathOptions={
-                    "color": "#3A3A3A",
-                    "fillColor": "#FF4444",
-                    "fillOpacity": 0.8,
-                    "weight": 2
-                },
+                position=[row['lat'], row['lon']],
                 n_clicks=0,
                 children=[
                     dl.Tooltip(
@@ -1048,18 +988,21 @@ def update_portfolio_list_and_markers(event_name, children):
                         ])
                     )
                 ],
-                className="portfolio-marker"
+                # className="portfolio-marker"
             )
             portfolio_markers.append(marker)
+        print(f"Time taken to create portfolio markers: {dt.datetime.now() - stime}")
         
         # Combine existing elements with event polygon and new markers
-        updated_children = filtered_children + [event_polygon_element] + portfolio_markers
+        # updated_children = filtered_children + [event_polygon_element] + portfolio_markers
+        updated_children = updated_children + portfolio_markers
         
-        return html.Div(portfolio_cards), count_text, portfolio_data, updated_children
+        print(f'Time taken to combine elements, {len(updated_children)} children: {dt.datetime.now() - stime}')
+        return viewport, html.Div(portfolio_cards), count_text, portfolio_data, updated_children
         
     except Exception as e:
         print(f"Error fetching portfolios: {e}")
-        return html.Div(
+        return viewport, html.Div(
             f"Error loading portfolios: {str(e)}",
             style={
                 "color": "#FF6B6B",
@@ -1069,142 +1012,11 @@ def update_portfolio_list_and_markers(event_name, children):
                 "padding": "20px"
             }
         ), "Error", [], children
-        
-    # except Exception as e:
-    #     print(f"Error fetching events: {e}")
-    #     print("Returning empty list")
-    #     return [], "Select an event...", False, None
 
-# # Callback to populate table dropdown when schema is selected
-# @app.callback(
-#     [Output('table-dropdown', 'options'),
-#      Output('table-dropdown', 'placeholder'),
-#      Output('table-dropdown', 'disabled'),
-#      Output('table-dropdown', 'value')],
-#     Input('schema-dropdown', 'value'),
-#     State('catalog-dropdown', 'value'),
-#     prevent_initial_call=False
-# )
-# def populate_tables(selected_schema, selected_catalog):
-#     """Populate the table dropdown when a schema is selected"""
-#     # print(f"Populating tables for schema: {selected_schema}, catalog: {selected_catalog}")
-    
-#     global load_defaults
-#     global default_table
-
-#     if (not selected_schema or not selected_catalog) and default_table is None:
-#         return [], "Select a table...", True, None
-    
-#     try:
-#         print(f"Fetching tables for schema {selected_catalog}.{selected_schema}...")
-#         tables = get_tables(selected_catalog, selected_schema)
-#         print(f"Retrieved tables: {tables}")
-#         return tables, "Select a table...", False, default_table if load_defaults else None
-#     except Exception as e:
-#         print(f"Error fetching tables for schema {selected_catalog}.{selected_schema}: {e}")
-#         print("ASSUMING NOT AVAILABLE")
-#         return [{'label': 'NOT AVAILABLE', 'value': 'NOT AVAILABLE'}], "Select a table...", False, None
-
-# # Callback to populate column dropdown when table is selected
-# @app.callback(
-#     [Output('column-dropdown', 'options'),
-#      Output('column-dropdown', 'placeholder'),
-#      Output('column-dropdown', 'disabled'),
-#      Output('column-dropdown', 'value')],
-#     Input('table-dropdown', 'value'),
-#     [State('catalog-dropdown', 'value'),
-#      State('schema-dropdown', 'value')],
-#     prevent_initial_call=False
-# )
-# def populate_columns(selected_table, selected_catalog, selected_schema):
-#     """Populate the column dropdown when a table is selected"""
-#     # print(f"Populating columns for table: {selected_table}, schema: {selected_schema}, catalog: {selected_catalog}")
-
-#     global load_defaults
-#     global default_column
-
-#     if (not selected_table or not selected_catalog or not selected_schema) and default_column is None:
-#         return [], "Select a column...", True, None
-    
-#     try:
-#         print(f"Fetching columns for table {selected_catalog}.{selected_schema}.{selected_table}...")
-#         columns = get_columns(selected_catalog, selected_schema, selected_table)
-#         print(f"Retrieved columns: {columns}")
-#         return columns, "Select a column...", False, default_column if load_defaults else None
-#     except Exception as e:
-#         print(f"Error fetching columns for table {selected_catalog}.{selected_schema}.{selected_table}: {e}")
-#         print("ASSUMING NOT AVAILABLE")
-#         return ['NOT AVAILABLE'], "Select a column...", False, None
-
-# # Callback to validate column and show description
-# @app.callback(
-#     [Output('column-description', 'children'),
-#      Output('refresh-button', 'disabled'),
-#      Output('refresh-button', 'style'),
-#      Output('refresh-button', 'title')],
-#     [Input('column-dropdown', 'value'),
-#      Input('catalog-dropdown', 'value'),
-#      Input('schema-dropdown', 'value'),
-#      Input('table-dropdown', 'value')],
-#     prevent_initial_call=False
-# )
-# def validate_column(selected_column, selected_catalog, selected_schema, selected_table):
-#     """Validate the selected column and return description"""
-#     disabled_style = {
-#         "backgroundColor": "#666666",
-#         "color": "#CCCCCC",
-#         "cursor": "not-allowed",
-#         "borderRadius": "4px",
-#         "fontSize": "14px",
-#         "fontFamily": "Helvetica",
-#         "fontWeight": "bold",
-#         "width": "150px",
-#         "height": "35px",
-#         "border": "1px solid #999999",
-#         "marginTop": "20px",
-#         "opacity": "0.6"
-#     }
-#     enabled_style = {
-#         "backgroundColor": "#3A3A3A",
-#         "color": "#FFFFFF",
-#         "cursor": "pointer",
-#         "borderRadius": "4px",
-#         "fontSize": "14px",
-#         "fontFamily": "Helvetica",
-#         "fontWeight": "bold",
-#         "width": "150px",
-#         "height": "35px",
-#         "border": "1px solid #FFFFFF",
-#         "marginTop": "20px"
-#     }
-    
-#     if not selected_column or not selected_catalog or not selected_schema or not selected_table:
-#         return "", True, disabled_style, "Select a valid H3 column"
-    
-#     print(f"Validating column: {selected_column}, table: {selected_table}, schema: {selected_schema}, catalog: {selected_catalog}")
-
-#     try:
-#         resolution_query = f"SELECT h3_resolution({selected_column}) as resolution FROM {selected_catalog}.{selected_schema}.{selected_table} LIMIT 1"
-#         column_resolution = sqlQuery(resolution_query)['resolution'].iloc[0]
-#         # print(f"Column resolution: {column_resolution}")
-
-#         count_query = f"SELECT COUNT(*) as count FROM {selected_catalog}.{selected_schema}.{selected_table} WHERE {selected_column} IS NOT NULL"
-#         count_result = sqlQuery(count_query)['count'].iloc[0]
-#         # print(f"Count result: {count_result}")
-
-#         if column_resolution is None or column_resolution == 0 or count_result == 0:
-#             print("Column resolution is None or count is 0.")
-#             return "Column is not valid H3", True, disabled_style, "Must select a valid H3 column"
-#         else:
-#             print("Column resolution is valid. Returning columns.")
-#             return f"Column resolution: {column_resolution}; Row count: {format(count_result, ',')}", False, enabled_style, "Refresh map"
-#     except Exception as e:
-#         print(f"Column is not valid H3: {e}")
-#         return "Column is not valid H3", True, disabled_style, "Must select a valid H3 column"
-
-# Callback to handle clicks on portfolio cards or markers and update clicked-portfolio store
 @app.callback(
-    Output('clicked-portfolio', 'data'),
+    # Output('clicked-portfolio', 'data'),
+    [Output({"type": "portfolio-card", "index": dash.dependencies.ALL}, "style"),
+     Output({"type": "portfolio-marker", "index": dash.dependencies.ALL}, "icon")],
     [Input({"type": "portfolio-card", "index": dash.dependencies.ALL}, "n_clicks"),
      Input({"type": "portfolio-marker", "index": dash.dependencies.ALL}, "n_clicks")],
     [State({"type": "portfolio-card", "index": dash.dependencies.ALL}, "id"),
@@ -1214,53 +1026,27 @@ def update_portfolio_list_and_markers(event_name, children):
 )
 def handle_portfolio_click(card_clicks, marker_clicks, card_ids, marker_ids, current_clicked):
     """Handle clicks on portfolio cards or markers - only updates highlighting, no data reload"""
+    # print(f"PORTFOLIO CLICK CALLBACK: card_clicks: {card_clicks}, marker_clicks: {marker_clicks}, card_ids: {card_ids}, marker_ids: {marker_ids}, current_clicked: {current_clicked}")
+    print("PORTFOLIO CLICK CALLBACK")
+    
     ctx = callback_context
     
     if not ctx.triggered:
         return no_update
     
     triggered_id = ctx.triggered[0]['prop_id']
-    
-    # Parse which element was clicked
-    if 'portfolio-card' in triggered_id:
-        # A card was clicked - extract the portfolio ID from the triggered component
-        try:
-            triggered_dict = json.loads(triggered_id.split('.')[0])
-            portfolio_id = triggered_dict['index']
-            # Toggle off if clicking the same card
-            if current_clicked == portfolio_id:
-                return None
-            return portfolio_id
-        except:
-            return no_update
-    
-    elif 'portfolio-marker' in triggered_id:
-        # A marker was clicked - extract the portfolio ID from the triggered component
-        try:
-            triggered_dict = json.loads(triggered_id.split('.')[0])
-            portfolio_id = triggered_dict['index']
-            # Toggle off if clicking the same marker
-            if current_clicked == portfolio_id:
-                return None
-            return portfolio_id
-        except:
-            return no_update
-    
-    return no_update
-
-# Callback to update portfolio card styles based on clicked portfolio
-# This only updates visual styling - NO data reload
-@app.callback(
-    Output({"type": "portfolio-card", "index": dash.dependencies.MATCH}, "style"),
-    [Input('clicked-portfolio', 'data')],
-    [State({"type": "portfolio-card", "index": dash.dependencies.MATCH}, "id")],
-    prevent_initial_call=False
-)
-def update_card_style(clicked_portfolio, card_id):
-    """Update card style based on whether it's clicked - visual update only, no data reload"""
-    portfolio_id = card_id['index']
-    
-    base_style = {
+    # custom_icon = dict(
+    #     iconUrl="https://leafletjs.com/examples/custom-icons/leaf-green.png",
+    #     shadowUrl="https://leafletjs.com/examples/custom-icons/leaf-shadow.png",
+    #     iconSize=[38, 95],
+    #     shadowSize=[50, 64],
+    #     iconAnchor=[22, 94],
+    #     shadowAnchor=[4, 62],
+    #     popupAnchor=[-3, -76],
+    # )
+    icon_style_base = dict(iconUrl=svg_pin_icon("#3A3A3A"), iconSize=[40, 40], iconAnchor=[20, 40])
+    icon_style_clicked = dict(iconUrl=svg_pin_icon("#4CAF50"), iconSize=[40, 40], iconAnchor=[20, 40])
+    card_style_base = {
         "backgroundColor": "#2C2C2C",
         "padding": "12px",
         "marginBottom": "10px",
@@ -1273,50 +1059,22 @@ def update_card_style(clicked_portfolio, card_id):
         "width": "100%",
         "textAlign": "left"
     }
-    
-    if clicked_portfolio == portfolio_id:
-        # Highlighted style when clicked
-        return {
-            **base_style,
-            "backgroundColor": "#3D3D3D",
-            "border": "2px solid #4CAF50",
-            "boxShadow": "0 4px 8px rgba(76, 175, 80, 0.3)",
-            "transform": "translateX(5px)"
-        }
-    
-    return base_style
-
-# Callback to update marker styles based on clicked portfolio
-# This only updates visual styling - NO data reload
-@app.callback(
-    [Output({"type": "portfolio-marker", "index": dash.dependencies.MATCH}, "pathOptions"),
-     Output({"type": "portfolio-marker", "index": dash.dependencies.MATCH}, "radius")],
-    [Input('clicked-portfolio', 'data')],
-    [State({"type": "portfolio-marker", "index": dash.dependencies.MATCH}, "id")],
-    prevent_initial_call=False
-)
-def update_marker_style(clicked_portfolio, marker_id):
-    """Update marker style based on whether it's clicked - visual update only, no data reload"""
-    portfolio_id = marker_id['index']
-    
-    if clicked_portfolio == portfolio_id:
-        # Highlighted style when clicked - green color matching the card border
-        path_options = {
-            "color": "#3A3A3A",
-            "fillColor": "#4CAF50",
-            "fillOpacity": 0.5,
-            "weight": 3
-        }
-        return path_options, 16
-    
-    # Default style - red
-    path_options = {
-        "color": "#3A3A3A",
-        "fillColor": "#FF4444",
-        "fillOpacity": 0.5,
-        "weight": 2
+    card_style_clicked = {
+        **card_style_base,
+        "backgroundColor": "#3D3D3D",
+        "border": "2px solid #4CAF50",
+        "boxShadow": "0 4px 8px rgba(76, 175, 80, 0.3)",
+        "transform": "translateX(5px)"
     }
-    return path_options, 8
+
+    triggered_dict = json.loads(triggered_id.split('.')[0])
+    portfolio_id = triggered_dict['index']
+    
+    card_styles = [card_style_clicked if x["index"] == portfolio_id else card_style_base for x in card_ids]
+    marker_icons = [icon_style_clicked if x["index"] == portfolio_id else icon_style_base for x in marker_ids]
+
+    return card_styles, marker_icons
+    
 
 if __name__ == "__main__":
     app.run(debug=True)
