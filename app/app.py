@@ -305,19 +305,21 @@ def zoom_to_h3_resolution(zoom):
     elif zoom < 8:
         return 5
     elif zoom < 10:
-        return 7
+        return 6
     elif zoom < 12:
-        return 8
-    elif zoom < 13:
-        return 8
-    elif zoom < 14:
-        return 8
-    elif zoom < 16:
-        return 8
-    elif zoom < 17:
-        return 8
+        return 7
     else:
         return 8
+    # elif zoom <= 13:
+    #     return 8
+    # elif zoom < 14:
+    #     return 8
+    # elif zoom < 16:
+    #     return 8
+    # elif zoom < 17:
+    #     return 8
+    # else:
+    #     return 8
     
 def bounds_to_wkt(bounds):
     # Input bounds: [southwest, northeast] in (lat, lon)
