@@ -201,10 +201,13 @@ def get_affected_portfolios(event_name=None):
     ) as connection:
         with connection.cursor() as cursor:
             event_wkt = get_event_details(event_name)
+            buffer_wkt = create_buffer_polygon(event_wkt, 20, units="miles")
             query = f"""
-                SELECT portfolio_id, id as property_id, property_value, name, lat, lon, housenumber, street, city, state, postcode
+                SELECT portfolio_id, id as property_id, property_value, name, lat, lon, housenumber, street, city, state, postcode,
+                       ST_CONTAINS(ST_GEOMFROMTEXT('{event_wkt}'), ST_POINT(lon, lat)) as core_polygon,
+                       ST_CONTAINS(ST_GEOMFROMTEXT('{buffer_wkt}'), ST_POINT(lon, lat)) as secondary_polygon
                 FROM timo.cat_risk.portfolio
-                WHERE ST_CONTAINS(ST_GEOMFROMTEXT('{event_wkt}'), ST_POINT(lon, lat))
+                WHERE ST_CONTAINS(ST_GEOMFROMTEXT('{buffer_wkt}'), ST_POINT(lon, lat))
             """
             cursor.execute(query)
             results = cursor.fetchall()
@@ -339,6 +342,29 @@ def bounds_to_wkt(bounds):
     poly = Polygon(polygon_coords)
     wkt_string = poly.wkt
     return wkt_string
+
+def create_buffer_polygon(wkt_string, buffer_distance, units="degrees"):
+    """
+    Create a buffer polygon around the input polygon (in WKT format) at the specified distance.
+    Args:
+        wkt_string (str): WKT string describing the input polygon.
+        buffer_distance (float): Buffer distance.
+        units (str): Units for the buffer distance ("degrees" or "miles").
+    Returns:
+        str: WKT string of the buffered polygon, or None on error.
+    """
+    try:
+        poly = wkt.loads(wkt_string)
+        distance = buffer_distance
+        if units == "miles":
+            # Approximate conversion: 1 degree (lat/lon) ~= 69 miles
+            distance = buffer_distance / 69.0
+        # else, assume degrees
+        buffered_poly = poly.buffer(distance)
+        return buffered_poly.wkt
+    except Exception as e:
+        print(f"Error creating buffer: {e}")
+        return None
 
 def create_linear_color_scale(data, n_colors=10):
     """Create linear-scaled color breaks for mapping"""
@@ -841,14 +867,17 @@ def update_portfolio_list_and_markers(event_name, children):
     
     try:
         event_wkt = get_event_details(event_name)
-        global_bounds = wkt_to_bounds(event_wkt)
+        buffer_wkt = create_buffer_polygon(event_wkt, 20, units="miles")
+        global_bounds = wkt_to_bounds(buffer_wkt)
         viewport = dict(
             bounds=global_bounds,
             transition="flyTo",
             duration=3000
         )
         event_polygon = [list([coord[1], coord[0]]) for coord in wkt_to_geojson(event_wkt)['coordinates'][0]][:-1]
-        event_polygon_element = dl.Polygon(id={"type": "event-polygon", "index": "event-polygon-1"}, positions=event_polygon, color="#39FF14", fillOpacity=0.05)
+        buffer_polygon = [list([coord[1], coord[0]]) for coord in wkt_to_geojson(buffer_wkt)['coordinates'][0]][:-1]
+        event_polygon_element = dl.Polygon(id={"type": "event-polygon", "index": "event-polygon-core"}, positions=event_polygon, color="#39FF14", fillOpacity=0.1)
+        buffer_polygon_element = dl.Polygon(id={"type": "event-polygon", "index": "buffer-polygon-secondary"}, positions=buffer_polygon, color="#FFFF33", fillOpacity=0.05)
         
         # Filter updated_children to only include elements where x['props']['positions'] coordinates overlap with the viewport coordinates using shapely
         viewport_filter = wkt.loads(event_wkt)
@@ -864,6 +893,7 @@ def update_portfolio_list_and_markers(event_name, children):
         
         # updated_children = [x for x in children if x['props']['id']['type'] != 'event-polygon']
         updated_children.append(event_polygon_element)
+        updated_children.append(buffer_polygon_element)
         print(f"Time taken to create event polygon: {dt.datetime.now() - stime}")
 
         # Fetch portfolios affected by the event
@@ -1023,13 +1053,15 @@ def update_portfolio_list_and_markers(event_name, children):
      Input({"type": "portfolio-marker", "index": dash.dependencies.ALL}, "n_clicks")],
     [State({"type": "portfolio-card", "index": dash.dependencies.ALL}, "id"),
      State({"type": "portfolio-marker", "index": dash.dependencies.ALL}, "id"),
+     State('portfolio-data-store', 'data'),
      State('clicked-portfolio', 'data')],
     prevent_initial_call=True
 )
-def handle_portfolio_click(card_clicks, marker_clicks, card_ids, marker_ids, current_clicked):
+def handle_portfolio_click(card_clicks, marker_clicks, card_ids, marker_ids, portfolio_data, current_clicked):
     """Handle clicks on portfolio cards or markers - only updates highlighting, no data reload"""
     # print(f"PORTFOLIO CLICK CALLBACK: card_clicks: {card_clicks}, marker_clicks: {marker_clicks}, card_ids: {card_ids}, marker_ids: {marker_ids}, current_clicked: {current_clicked}")
     print("PORTFOLIO CLICK CALLBACK")
+    # print(f"portfolio_data: {portfolio_data}")
     
     ctx = callback_context
     
@@ -1037,6 +1069,11 @@ def handle_portfolio_click(card_clicks, marker_clicks, card_ids, marker_ids, cur
         return no_update
     
     triggered_id = ctx.triggered[0]['prop_id']
+    triggered_dict = json.loads(triggered_id.split('.')[0])
+    portfolio_id = triggered_dict['index']
+    core = [x['core_polygon'] for x in portfolio_data]
+    secondary = [x['secondary_polygon'] for x in portfolio_data]
+    # print(f"type(core), type(secondary): {type(core)}, {type(secondary)}")
     # custom_icon = dict(
     #     iconUrl="https://leafletjs.com/examples/custom-icons/leaf-green.png",
     #     shadowUrl="https://leafletjs.com/examples/custom-icons/leaf-shadow.png",
@@ -1046,14 +1083,15 @@ def handle_portfolio_click(card_clicks, marker_clicks, card_ids, marker_ids, cur
     #     shadowAnchor=[4, 62],
     #     popupAnchor=[-3, -76],
     # )
-    icon_style_base = dict(iconUrl=svg_pin_icon("#3A3A3A"), iconSize=[40, 40], iconAnchor=[20, 40])
-    icon_style_clicked = dict(iconUrl=svg_pin_icon("#4CAF50"), iconSize=[40, 40], iconAnchor=[20, 40])
-    card_style_base = {
+    icon_style_core = dict(iconUrl=svg_pin_icon("#4CAF50"), iconSize=[40, 40], iconAnchor=[20, 40])
+    icon_style_secondary = dict(iconUrl=svg_pin_icon("#FFFF33"), iconSize=[40, 40], iconAnchor=[20, 40])
+    icon_style_clicked = dict(iconUrl=svg_pin_icon("#3A3A3A"), iconSize=[60, 60], iconAnchor=[30, 60])
+    card_style_core = {
         "backgroundColor": "#2C2C2C",
         "padding": "12px",
         "marginBottom": "10px",
         "borderRadius": "6px",
-        "border": "1px solid #4A4A4A",
+        "border": "2px solid #4CAF50",
         "fontFamily": "Helvetica",
         "fontSize": "12px",
         "cursor": "pointer",
@@ -1061,10 +1099,17 @@ def handle_portfolio_click(card_clicks, marker_clicks, card_ids, marker_ids, cur
         "width": "100%",
         "textAlign": "left"
     }
+    card_style_secondary = {
+        **card_style_core,
+        "backgroundColor": "#2C2C2C",
+        "border": "2px solid #FFFF33",
+        "boxShadow": "0 4px 8px rgba(255, 255, 51, 0.3)",
+        "transform": "translateX(5px)"
+    }
     card_style_clicked = {
-        **card_style_base,
-        "backgroundColor": "#3D3D3D",
-        "border": "2px solid #4CAF50",
+        **card_style_core,
+        "backgroundColor": "#2C2C2C",
+        "border": "2px solid #FFFFFF",
         "boxShadow": "0 4px 8px rgba(76, 175, 80, 0.3)",
         "transform": "translateX(5px)"
     }
@@ -1072,8 +1117,23 @@ def handle_portfolio_click(card_clicks, marker_clicks, card_ids, marker_ids, cur
     triggered_dict = json.loads(triggered_id.split('.')[0])
     portfolio_id = triggered_dict['index']
     
-    card_styles = [card_style_clicked if x["index"] == portfolio_id else card_style_base for x in card_ids]
-    marker_icons = [icon_style_clicked if x["index"] == portfolio_id else icon_style_base for x in marker_ids]
+    card_styles = []
+    marker_icons = []
+    for i in range(len(card_ids)):
+        if card_ids[i]["index"] == portfolio_id:
+            card_style = card_style_clicked
+            marker_icon = icon_style_clicked
+        elif core[i]:
+            card_style = card_style_core
+            marker_icon = icon_style_core
+        elif secondary[i]:
+            card_style = card_style_secondary
+            marker_icon = icon_style_secondary
+        card_styles.append(card_style)
+        marker_icons.append(marker_icon)
+
+    # card_styles = [card_style_clicked if x["index"] == portfolio_id else card_style_base for x in card_ids]
+    # marker_icons = [icon_style_clicked if x["index"] == portfolio_id else icon_style_base for x in marker_ids]
 
     return card_styles, marker_icons
     
