@@ -564,6 +564,7 @@ app.layout = html.Div(
         dcc.Store(id='property-data-store', data=[]),
         dcc.Store(id='highlighted-property', data=None),
         dcc.Store(id='clicked-property', data=None),
+        dcc.Store(id='active-ai-assessment', data=None),
         # Add dropdown selection controls at the top
         html.Div(
             [
@@ -662,25 +663,6 @@ app.layout = html.Div(
                             color='#3A3A3A',
                             overlay_style={"visibility":"visible", "filter": "blur(3px)"},
                         ),
-                                html.Div(
-                        children="Click the 'AI Assessment' button on any affected property to generate a risk assessment.",
-                        id="map-textbox",
-                        style={
-                            "font-family": "Helvetica",
-                            "position": "absolute",
-                            "top": "80%",
-                            "left": "50%",
-                            "transform": "translate(-50%, -50%)",
-                            "backgroundColor": "rgba(0, 0, 0, 0.5)",  # Semi-transparent black
-                            "color": "white",
-                            "padding": "20px",
-                            "borderRadius": "10px",
-                            "textAlign": "left",
-                            "text-wrap": "pretty",
-                            "z-index": "9999"
-                            # "overflowY": "scroll"
-                        },
-                    ),
                     dcc.Interval(id="interval-component", interval=100, n_intervals=0, disabled=True),  # Check every n milliseconds
                     ],
                     style={"width": "75%", "display": "inline-block", "verticalAlign": "top", "position": "relative"}
@@ -1034,6 +1016,22 @@ def update_property_list_and_markers(event_name, children):
                                             "textAlign": "center",
                                             "transition": "background-color 0.2s ease",
                                         }
+                                    ),
+                                    html.Div(
+                                        id={"type": "ai-assessment-text", "index": str(row['property_id'])},
+                                        style={
+                                            "display": "none",
+                                            "marginTop": "10px",
+                                            "padding": "10px",
+                                            "backgroundColor": "#1A1A1A",
+                                            "borderRadius": "4px",
+                                            "border": "1px solid #5A5A5A",
+                                            "color": "#FFFFFF",
+                                            "fontFamily": "Helvetica",
+                                            "fontSize": "11px",
+                                            "lineHeight": "1.5",
+                                            "whiteSpace": "pre-wrap"
+                                        }
                                     )
                                 ]
                             )
@@ -1195,7 +1193,8 @@ def handle_property_click(card_clicks, marker_clicks, card_ids, marker_ids, prop
     
 # # Callback to start iterative text update
 @app.callback(
-    [Output("interval-component", "disabled", allow_duplicate=True)],
+    [Output("interval-component", "disabled", allow_duplicate=True),
+     Output('active-ai-assessment', 'data')],
     [Input({"type": "ai-assessment-btn", "index": dash.dependencies.ALL}, "n_clicks")],
     [State('property-data-store', 'data'),
      State('event-dropdown', 'value')],
@@ -1217,37 +1216,69 @@ def start_text_update(btn_clicks, property_data, event_name):
         clicked_property_data = [x for x in property_data if str(x['property_id']) == str(property_id)][0]
         threading.Thread(target=fmapi_stream, args=(clicked_property_data, event_name,)).start()
         print("Turning on the interval-component")
-        return False 
+        return False, property_id
     else:
-        return True
+        return True, None
 
 @app.callback(
-    [Output("map-textbox", "children"), Output("interval-component", "disabled", allow_duplicate=True)],
+    [Output({"type": "ai-assessment-text", "index": dash.dependencies.ALL}, "children"),
+     Output({"type": "ai-assessment-text", "index": dash.dependencies.ALL}, "style"),
+     Output("interval-component", "disabled", allow_duplicate=True)],
     [Input("interval-component", "n_intervals")],
+    [State('active-ai-assessment', 'data'),
+     State({"type": "ai-assessment-text", "index": dash.dependencies.ALL}, "id")],
     prevent_initial_call=True,
 )
-def update_response(n_intervals):
+def update_response(n_intervals, active_property_id, text_ids):
     global response_list
     global stream_complete
 
-    # print("len(response_list)", len(response_list), "n_intervals", n_intervals)
+    if not active_property_id or not text_ids:
+        return [no_update] * len(text_ids), [no_update] * len(text_ids), True
 
-    # if n_intervals < 100:
-    #     return f"THIS IS A TEST, {n_intervals}", False
-    # else:
-    #     return f"THIS TEST IS OVER, {n_intervals}", True
+    # Initialize outputs
+    children_outputs = [no_update] * len(text_ids)
+    style_outputs = [no_update] * len(text_ids)
+    
+    # Find the index of the active property
+    active_index = None
+    for i, text_id in enumerate(text_ids):
+        if str(text_id['index']) == str(active_property_id):
+            active_index = i
+            break
+    
+    if active_index is None:
+        return children_outputs, style_outputs, True
+
+    visible_style = {
+        "display": "block",
+        "marginTop": "10px",
+        "padding": "10px",
+        "backgroundColor": "#1A1A1A",
+        "borderRadius": "4px",
+        "border": "1px solid #5A5A5A",
+        "color": "#FFFFFF",
+        "fontFamily": "Helvetica",
+        "fontSize": "11px",
+        "lineHeight": "1.5",
+        "whiteSpace": "pre-wrap"
+    }
 
     if not stream_complete:
-        # print("STREAM IS IN PROCESS")
-        return "".join([x for x in response_list if x is not None]), False
+        # Stream is in process
+        current_text = "".join([x for x in response_list if x is not None])
+        children_outputs[active_index] = current_text
+        style_outputs[active_index] = visible_style
+        return children_outputs, style_outputs, False
     else:
-        print("STREAM IS DONE")
-        if len(response_list)>0:
+        # print("STREAM IS DONE")
+        if len(response_list) > 0:
             final_results = [x for x in response_list if x is not None]
-            # print("RETURNING:", "".join(final_results))
-            return "".join(final_results), True
-        response_list = []
-        return dash.no_update, True
+            children_outputs[active_index] = "".join(final_results)
+            style_outputs[active_index] = visible_style
+            response_list = []
+            return children_outputs, style_outputs, True
+        return children_outputs, style_outputs, True
 
 
 
