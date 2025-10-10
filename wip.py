@@ -19,6 +19,8 @@ import json
 import datetime as dt
 from shapely.geometry import Polygon, Point, box
 from shapely import wkt
+import threading
+import requests
 from assets.svg_icons import svg_pin_icon
 
 # Set up the app
@@ -57,6 +59,9 @@ default_catastrophe_type = "flood_risk"
 global_center = None
 global_zoom = None
 global_bounds = None
+# List to hold streamed responses
+response_list = []
+stream_complete = True
 
 # tile_layer_url = "http://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png"
 tile_layer_url = "http://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png"
@@ -97,6 +102,66 @@ def sqlQuery(query: str) -> pd.DataFrame:
             rows = cursor.fetchall()
             df = pd.DataFrame(rows, columns=columns)
         return df
+
+def fmapi_stream(clicked_portfolio_data, event_name):
+    global response_list
+    global stream_complete
+
+    print("SETTING STREAM COMPLETE TO FALSE")
+    response_list = []
+    stream_complete = False
+
+    if clicked_portfolio_data and event_name:
+        databricks_host = "https://" + get_databricks_server_hostname()
+        databricks_token = get_databricks_token()
+        model = 'databricks-meta-llama-3-3-70b-instruct'
+        # model = 'databricks-dbrx-instruct'
+        endpoint = f"{databricks_host}/serving-endpoints/{model}/invocations"
+
+        # Define the headers, including the authorization token
+        headers = {
+            "Authorization": f"Bearer {databricks_token}",
+            "Content-Type": "application/json"
+        }
+
+        # Define the payload for the request
+        payload = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": "You are an insurance risk assessor. You are given a property and you need to write a brief payout assessment of the property with respect to a catasrophic event."},
+                {"role": "user", "content": f"Please write a brief payout assessment of the potential damage to the following property as inflicted by the catastrophic event: {event_name} \n\n {clicked_portfolio_data}"}
+            ],
+            "max_tokens": 256,
+            "stream": True  # Enable streaming
+        }
+
+        # print(endpoint, payload)
+        # Make the POST request with streaming enabled
+        response = requests.post(endpoint, headers=headers, data=json.dumps(payload), stream=True)
+        print(response)
+        try:
+            for chunk in response.iter_content(chunk_size=None):
+                if chunk:
+                    # print("CHUNK:", chunk)
+                    new_chunks = chunk.decode('utf-8').replace('\n'," ").split('data:')
+                    new_chunks = [x.strip() for x in new_chunks if len(x.strip())>0]
+                    # print("NEW_CHUNKS", new_chunks)
+                    for new_chunk in new_chunks:
+                        # if new_chunk == "[DONE]":
+                        #     break
+                        # print("NEW_CHUNK", new_chunk)
+                        new_chunk_data = json.loads(new_chunk)
+                        # print("NEW_CHUNK_DATA:", new_chunk_data)
+                        if new_chunk_data['choices'][0]['finish_reason'] == 'stop':
+                            break
+                        response_list.append(new_chunk_data['choices'][0]['delta']['content'])
+            response_list.append(None)
+        except Exception as e:
+            response_list.append(None)
+            print(f"An error occurred: {e}")
+
+    print("SETTING STREAM COMPLETE TO TRUE")
+    stream_complete = True
 
 # Fetch the all h3 data
 def get_data(catastrophe_type=None, resolution=9, bounds=None, column_resolution=None):
@@ -551,29 +616,29 @@ app.layout = html.Div(
                 #     ],
                 #     style={"display": "inline-block", "marginRight": "20px"}
                 # ),
-                html.Div(
-                    [                        
-                        dcc.Loading(
-                            id="loading-spinner",
-                            type="circle",  # options: "default", "circle", "dot", "cube"
-                            children=html.P(
-                                            id="column-description",
-                                            style={
-                                                "color": "#FFFFFF", 
-                                                "fontFamily": "Helvetica", 
-                                                "fontSize": "14px",
-                                                "margin": "0",
-                                                "display": "inline-block",
-                                                "alignItems": "stretch",
-                                                "verticalAlign": "middle"
-                                            }
-                                        ),
-                            color="#FFFFFF",
-                            style={"transform": "scale(0.5)"},
-                        ),
-                    ],
-                    style={"display": "inline-block", "marginRight": "20px", "alignItems": "stretch"}
-                ),
+                # html.Div(
+                #     [                        
+                #         dcc.Loading(
+                #             id="loading-spinner",
+                #             type="circle",  # options: "default", "circle", "dot", "cube"
+                #             children=html.P(
+                #                             id="column-description",
+                #                             style={
+                #                                 "color": "#FFFFFF", 
+                #                                 "fontFamily": "Helvetica", 
+                #                                 "fontSize": "14px",
+                #                                 "margin": "0",
+                #                                 "display": "inline-block",
+                #                                 "alignItems": "stretch",
+                #                                 "verticalAlign": "middle"
+                #                             }
+                #                         ),
+                #             color="#FFFFFF",
+                #             style={"transform": "scale(0.5)"},
+                #         ),
+                #     ],
+                #     style={"display": "inline-block", "marginRight": "20px", "alignItems": "stretch"}
+                # ),
             ],
             style={
                 "backgroundColor": "#3A3A3A",
@@ -644,6 +709,26 @@ app.layout = html.Div(
                             color='#3A3A3A',
                             overlay_style={"visibility":"visible", "filter": "blur(3px)"},
                         ),
+                                html.Div(
+                        children="Select an affected property from the list or click on a portfolio marker on the map.",
+                        id="map-textbox",
+                        style={
+                            "font-family": "Helvetica",
+                            "position": "absolute",
+                            "top": "80%",
+                            "left": "50%",
+                            "transform": "translate(-50%, -50%)",
+                            "backgroundColor": "rgba(0, 0, 0, 0.5)",  # Semi-transparent black
+                            "color": "white",
+                            "padding": "20px",
+                            "borderRadius": "10px",
+                            "textAlign": "left",
+                            "text-wrap": "pretty",
+                            "z-index": "9999"
+                            # "overflowY": "scroll"
+                        },
+                    ),
+                    dcc.Interval(id="interval-component", interval=100, n_intervals=0, disabled=True),  # Check every n milliseconds
                     ],
                     style={"width": "75%", "display": "inline-block", "verticalAlign": "top", "position": "relative"}
                 ),
@@ -1136,6 +1221,65 @@ def handle_portfolio_click(card_clicks, marker_clicks, card_ids, marker_ids, por
 
     return card_styles, marker_icons
     
+# # Callback to start iterative text update
+@app.callback(
+    [Output("interval-component", "disabled", allow_duplicate=True)],
+    [Input({"type": "portfolio-card", "index": dash.dependencies.ALL}, "n_clicks"),
+     Input({"type": "portfolio-marker", "index": dash.dependencies.ALL}, "n_clicks")],
+    [State('portfolio-data-store', 'data'),
+     State('event-dropdown', 'value')],
+    prevent_initial_call=True
+)
+def start_text_update(card_clicks, marker_clicks, portfolio_data, event_name):
+    print("START TEXT UPDATE:")
+    
+    ctx = callback_context
+    
+    if not ctx.triggered:
+        return no_update
+    
+    triggered_id = ctx.triggered[0]['prop_id']
+    triggered_dict = json.loads(triggered_id.split('.')[0])
+    portfolio_id = triggered_dict['index']
+
+    if portfolio_data:
+        clicked_portfolio_data = [x for x in portfolio_data if str(x['property_id']) == str(portfolio_id)][0]
+        threading.Thread(target=fmapi_stream, args=(clicked_portfolio_data, event_name,)).start()
+        print("Turning on the interval-component")
+        return False 
+    else:
+        return True
+
+@app.callback(
+    [Output("map-textbox", "children"), Output("interval-component", "disabled", allow_duplicate=True)],
+    [Input("interval-component", "n_intervals")],
+    prevent_initial_call=True,
+)
+def update_response(n_intervals):
+    global response_list
+    global stream_complete
+
+    # print("len(response_list)", len(response_list), "n_intervals", n_intervals)
+
+    # if n_intervals < 100:
+    #     return f"THIS IS A TEST, {n_intervals}", False
+    # else:
+    #     return f"THIS TEST IS OVER, {n_intervals}", True
+
+    if not stream_complete:
+        # print("STREAM IS IN PROCESS")
+        return "".join([x for x in response_list if x is not None]), False
+    else:
+        print("STREAM IS DONE")
+        if len(response_list)>0:
+            final_results = [x for x in response_list if x is not None]
+            # print("RETURNING:", "".join(final_results))
+            return "".join(final_results), True
+        response_list = []
+        return dash.no_update, True
+
+
+
 
 if __name__ == "__main__":
     app.run(debug=True)
