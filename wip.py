@@ -17,6 +17,9 @@ from dash_extensions.enrich import DashProxy, Input, Output, html
 import flask
 import json
 import datetime as dt
+from shapely.geometry import Polygon, Point, box
+from shapely import wkt
+from assets.svg_icons import svg_pin_icon
 
 # Set up the app
 app = DashProxy(__name__)
@@ -198,10 +201,13 @@ def get_affected_portfolios(event_name=None):
     ) as connection:
         with connection.cursor() as cursor:
             event_wkt = get_event_details(event_name)
+            buffer_wkt = create_buffer_polygon(event_wkt, 20, units="miles")
             query = f"""
-                SELECT id, property_value, name, lat, lon, housenumber, street, city, state, postcode
+                SELECT portfolio_id, id as property_id, property_value, name, lat, lon, housenumber, street, city, state, postcode,
+                       ST_CONTAINS(ST_GEOMFROMTEXT('{event_wkt}'), ST_POINT(lon, lat)) as core_polygon,
+                       ST_CONTAINS(ST_GEOMFROMTEXT('{buffer_wkt}'), ST_POINT(lon, lat)) as secondary_polygon
                 FROM timo.cat_risk.portfolio
-                WHERE ST_CONTAINS(ST_GEOMFROMTEXT('{event_wkt}'), ST_POINT(lon, lat))
+                WHERE ST_CONTAINS(ST_GEOMFROMTEXT('{buffer_wkt}'), ST_POINT(lon, lat))
             """
             cursor.execute(query)
             results = cursor.fetchall()
@@ -302,19 +308,21 @@ def zoom_to_h3_resolution(zoom):
     elif zoom < 8:
         return 5
     elif zoom < 10:
-        return 7
+        return 6
     elif zoom < 12:
-        return 8
-    elif zoom < 13:
-        return 8
-    elif zoom < 14:
-        return 8
-    elif zoom < 16:
-        return 8
-    elif zoom < 17:
-        return 8
+        return 7
     else:
         return 8
+    # elif zoom <= 13:
+    #     return 8
+    # elif zoom < 14:
+    #     return 8
+    # elif zoom < 16:
+    #     return 8
+    # elif zoom < 17:
+    #     return 8
+    # else:
+    #     return 8
     
 def bounds_to_wkt(bounds):
     # Input bounds: [southwest, northeast] in (lat, lon)
@@ -334,6 +342,29 @@ def bounds_to_wkt(bounds):
     poly = Polygon(polygon_coords)
     wkt_string = poly.wkt
     return wkt_string
+
+def create_buffer_polygon(wkt_string, buffer_distance, units="degrees"):
+    """
+    Create a buffer polygon around the input polygon (in WKT format) at the specified distance.
+    Args:
+        wkt_string (str): WKT string describing the input polygon.
+        buffer_distance (float): Buffer distance.
+        units (str): Units for the buffer distance ("degrees" or "miles").
+    Returns:
+        str: WKT string of the buffered polygon, or None on error.
+    """
+    try:
+        poly = wkt.loads(wkt_string)
+        distance = buffer_distance
+        if units == "miles":
+            # Approximate conversion: 1 degree (lat/lon) ~= 69 miles
+            distance = buffer_distance / 69.0
+        # else, assume degrees
+        buffered_poly = poly.buffer(distance)
+        return buffered_poly.wkt
+    except Exception as e:
+        print(f"Error creating buffer: {e}")
+        return None
 
 def create_linear_color_scale(data, n_colors=10):
     """Create linear-scaled color breaks for mapping"""
@@ -446,6 +477,7 @@ def data_to_polygons(map_data):
         style = style_function(map_data.iloc[i]['value'].item(), deciles)
 
         dlPolygons.append(dl.Polygon(
+            id={"type": "hex-polygon", "index": "hex-polygon-" + str(i)},
             positions=hex_boundaries_polygon,
             fillColor=style['fillColor'],
             color=style['color'],
@@ -464,6 +496,9 @@ def data_to_polygons(map_data):
 app.layout = html.Div(
     [
         dcc.Location(id="url"),
+        dcc.Store(id='portfolio-data-store', data=[]),
+        dcc.Store(id='highlighted-portfolio', data=None),
+        dcc.Store(id='clicked-portfolio', data=None),
         # Add dropdown selection controls at the top
         html.Div(
             [
@@ -600,7 +635,9 @@ app.layout = html.Div(
                                     id="map"
                                 ),
                                 # html.Div(id="map-container", children=leaflet_map),
-                                html.Div(id="legend-container", children=legend)
+                                html.Div(id="legend-container", children=legend),
+                                # Hidden div to trigger marker highlighting
+                                html.Div(id="marker-highlight-trigger", style={"display": "none"})
                             ],
                             id='loading-map',
                             type='default',
@@ -615,7 +652,7 @@ app.layout = html.Div(
                     [
                         html.Div(
                             [
-                                html.H4("Affected Portfolios", 
+                                html.H4("Affected Properties", 
                                        style={
                                            "color": "#FFFFFF", 
                                            "fontFamily": "Helvetica", 
@@ -663,23 +700,6 @@ app.layout = html.Div(
     style={"backgroundColor": "#29323C"},
     
 )
-
-# @app.callback(
-#     [Output('map', 'children'),
-#      Output('legend-container', 'children'),
-#      Output('refresh-button', 'style')],
-#     Input('refresh-button', 'n_clicks'),
-#     [State("map", "center"),
-#      State("map", "zoom"),
-#      State("map", "bounds"),
-#      State("catastrophe-dropdown", "value"),
-#      State("event-dropdown", "value")
-#      ],
-#      prevent_initial_call=True
-# )
-
-
-
 
 # Add callback for refresh button and initial load
 @app.callback(
@@ -738,25 +758,13 @@ def update_map(n_clicks, center, zoom, bounds, catastrophe_type, event_name, chi
         
         new_polygons = data_to_polygons(new_map_data)
 
-        # Keep event polygon in children
-        filtered_children = [x for x in children if 'id' in x['props'] and x["props"]["id"] == 'event-polygon']
+        # Keep event polygon and portfolio markers in children
+        filtered_children = [x for x in children 
+                           if 'id' in x.get('props', {}) 
+                           and (isinstance(x['props']['id'], dict) 
+                                and x['props']['id'].get('type') in ['event-polygon', 'portfolio-marker'])]
         polygons = new_polygons + filtered_children
 
-        # event_polygon = []
-        # if event_name:
-        #     event_wkt = get_event_details(event_name)
-        #     event_polygon = [list([coord[1], coord[0]]) for coord in wkt_to_geojson(event_wkt)['coordinates'][0]][:-1]
-        #     # print(f"Event Polygon: {event_polygon}")
-        #     # print(f"Global Bounds: {global_bounds}")
-        #     event_polygon = polygon_clip_to_bounds(event_polygon, global_bounds)
-        #     # print(f"Event Polygon Clipped to Bounds: {event_polygon}")
-        #     event_polygon = [dl.Polygon(positions=event_polygon, color="#39FF14", fillOpacity=0.04)]
-            
-        # polygons = polygons + new_polygons + event_polygon
-        # print(f"Polygons: {polygons}")
-        # Create new map and legend
-        # new_leaflet_map, new_legend = create_leaflet_map(new_map_data, zoom=global_zoom, center=global_center, wkt=event_wkt)
-        
         print("Map refreshed successfully!")
         return polygons, active_style
 
@@ -806,11 +814,11 @@ def update_button_style_on_click(n_clicks):
      Output('event-dropdown', 'placeholder'),
      Output('event-dropdown', 'disabled'),
      Output('event-dropdown', 'value')],
-    [Input('event-dropdown', 'id'),
-     Input("url", "pathname")],
+    # [Input('event-dropdown', 'id'),
+    [Input("url", "pathname")],
     prevent_initial_call=False
 )
-def populate_events(trigger, pathname):
+def populate_events(pathname):
     """Populate the catalog dropdown with available catalogs"""
     # print("Populating catalogs dropdown...")
     
@@ -825,50 +833,28 @@ def populate_events(trigger, pathname):
         print("Returning empty list")
         return [], "Select an event...", False, None
 
-# Callback to populate catalog dropdown on app load
+# Callback to update both portfolio list and markers when event is selected
 @app.callback(
     [Output('map', 'viewport'),
-     Output('map-polygons', 'children', allow_duplicate=True)],
+     Output('portfolio-list', 'children'),
+     Output('portfolio-count', 'children'),
+     Output('portfolio-data-store', 'data'),
+     Output('map-polygons', 'children')],
     [Input('event-dropdown', 'value')],
     [State('map-polygons', 'children')],
-    prevent_initial_call=True,
-)
-def flyto_event(event_name, children):
-    """Flyto the event bounds"""
-
-    global global_bounds
-    print(f"intial event_name: {event_name}")
-
-    if event_name is not None:
-        event_wkt = get_event_details(event_name)
-        flyto_bounds = wkt_to_bounds(event_wkt)
-        event_polygon = [list([coord[1], coord[0]]) for coord in wkt_to_geojson(event_wkt)['coordinates'][0]][:-1]
-        global_bounds = flyto_bounds
-
-        # children = [x for x in children if 'id' not in x or x.id != 'event-polygon']
-        filtered_children = [x for x in children if 'id' not in x['props'] or x["props"]["id"] != 'event-polygon']
-        print(f"flyto filtered children: {filtered_children}")
-        filtered_children.append(dl.Polygon(id="event-polygon", positions=event_polygon, color="#39FF14", fillOpacity=0.05))
-
-        return dict(
-            bounds=global_bounds,
-            transition="flyTo",
-            duration=3000
-        ), filtered_children
-    else:
-        return dict(bounds=global_bounds), children
-
-# Callback to populate portfolio list when event is selected
-@app.callback(
-    [Output('portfolio-list', 'children'),
-     Output('portfolio-count', 'children')],
-    [Input('event-dropdown', 'value')],
     prevent_initial_call=True
 )
-def update_portfolio_list(event_name):
-    """Update the portfolio list when an event is selected"""
+def update_portfolio_list_and_markers(event_name, children):
+    """Update the portfolio list and map markers when an event is selected"""
+    
+    stime = dt.datetime.now()
+
+    global global_bounds
+    viewport = dict(bounds=global_bounds)
+    print(f"intial event_name: {event_name}")
+
     if event_name is None:
-        return html.Div(
+        return viewport, html.Div(
             "Select an event to view affected portfolios",
             style={
                 "color": "#CCCCCC",
@@ -877,14 +863,45 @@ def update_portfolio_list(event_name):
                 "textAlign": "center",
                 "padding": "20px"
             }
-        ), ""
+        ), "", [], children
     
     try:
+        event_wkt = get_event_details(event_name)
+        buffer_wkt = create_buffer_polygon(event_wkt, 20, units="miles")
+        global_bounds = wkt_to_bounds(buffer_wkt)
+        viewport = dict(
+            bounds=global_bounds,
+            transition="flyTo",
+            duration=3000
+        )
+        event_polygon = [list([coord[1], coord[0]]) for coord in wkt_to_geojson(event_wkt)['coordinates'][0]][:-1]
+        buffer_polygon = [list([coord[1], coord[0]]) for coord in wkt_to_geojson(buffer_wkt)['coordinates'][0]][:-1]
+        event_polygon_element = dl.Polygon(id={"type": "event-polygon", "index": "event-polygon-core"}, positions=event_polygon, color="#39FF14", fillOpacity=0.1)
+        buffer_polygon_element = dl.Polygon(id={"type": "event-polygon", "index": "buffer-polygon-secondary"}, positions=buffer_polygon, color="#FFFF33", fillOpacity=0.05)
+        
+        # Filter updated_children to only include elements where x['props']['positions'] coordinates overlap with the viewport coordinates using shapely
+        viewport_filter = wkt.loads(buffer_wkt)
+        filtered_children = []
+        for child in children:
+            if child['props']['id']['type'] == 'hex-polygon':
+                child_polygon = Polygon([(x[1], x[0]) for x in child['props']['positions']])
+                if child_polygon.is_valid and child_polygon.intersects(viewport_filter):
+                    filtered_children.append(child)
+
+        print(f"Time taken to filter children: {dt.datetime.now() - stime}")
+        updated_children = filtered_children
+        
+        # updated_children = [x for x in children if x['props']['id']['type'] != 'event-polygon']
+        updated_children.append(event_polygon_element)
+        updated_children.append(buffer_polygon_element)
+        print(f"Time taken to create event polygon: {dt.datetime.now() - stime}")
+
         # Fetch portfolios affected by the event
         portfolios_df = get_affected_portfolios(event_name)
+        print(f"Time taken to fetch portfolios: {dt.datetime.now() - stime}")
         
         if portfolios_df.empty:
-            return html.Div(
+            return viewport, html.Div(
                 "No portfolios found in this event area",
                 style={
                     "color": "#CCCCCC",
@@ -893,19 +910,29 @@ def update_portfolio_list(event_name):
                     "textAlign": "center",
                     "padding": "20px"
                 }
-            ), "0 portfolios"
+            ), "0 portfolios", [], updated_children
         
-        # Create portfolio cards
+        # Store portfolio data for markers
+        portfolio_data = portfolios_df.to_dict('records')
+        
+        # Create portfolio cards with hover interaction
         portfolio_cards = []
         for idx, row in portfolios_df.iterrows():
-            card = html.Div(
+            card = html.Button(
                 [
                     html.Div(
                         [
                             html.Div(
                                 [
-                                    html.Strong("ID: ", style={"color": "#FFFFFF"}),
-                                    html.Span(str(row['id']), style={"color": "#CCCCCC"})
+                                    html.Strong("Portfolio ID: ", style={"color": "#FFFFFF"}),
+                                    html.Span(str(row['portfolio_id']), style={"color": "#CCCCCC"})
+                                ],
+                                style={"marginBottom": "5px"}
+                            ),
+                            html.Div(
+                                [
+                                    html.Strong("Property ID: ", style={"color": "#FFFFFF"}),
+                                    html.Span(str(row['property_id']), style={"color": "#CCCCCC"})
                                 ],
                                 style={"marginBottom": "5px"}
                             ),
@@ -952,6 +979,9 @@ def update_portfolio_list(event_name):
                         ]
                     )
                 ],
+                id={"type": "portfolio-card", "index": str(row['property_id'])},
+                n_clicks=0,
+                className="portfolio-card",
                 style={
                     "backgroundColor": "#2C2C2C",
                     "padding": "12px",
@@ -959,18 +989,52 @@ def update_portfolio_list(event_name):
                     "borderRadius": "6px",
                     "border": "1px solid #4A4A4A",
                     "fontFamily": "Helvetica",
-                    "fontSize": "12px"
+                    "fontSize": "12px",
+                    "cursor": "pointer",
+                    "transition": "all 0.3s ease",
+                    "width": "100%",
+                    "textAlign": "left"
                 }
             )
             portfolio_cards.append(card)
+
+        print(f"Time taken to create portfolio cards: {dt.datetime.now() - stime}")
+        count_text = f"{len(portfolios_df):,} propert{'ies' if len(portfolios_df) != 1 else 'y'} affected"
         
-        count_text = f"{len(portfolios_df):,} portfolio{'s' if len(portfolios_df) != 1 else ''} affected"
+        # Add new portfolio markers with dl.Marker for better interactivity
+        portfolio_markers = []
+        for idx, row in portfolios_df.iterrows():
+            marker = dl.Marker(
+                id={"type": "portfolio-marker", "index": str(row['property_id'])},
+                position=[row['lat'], row['lon']],
+                n_clicks=0,
+                children=[
+                    dl.Tooltip(
+                        children=html.Div([
+                            html.Strong(f"Portfolio ID: {row['portfolio_id']}", style={"display": "block", "marginBottom": "5px"}),
+                            html.Strong(f"Property ID: {row['property_id']}", style={"display": "block", "marginBottom": "5px"}),
+                            html.Span(f"Value: ${row['property_value']:,.2f}" if pd.notna(row['property_value']) else "Value: N/A", 
+                                     style={"display": "block", "marginBottom": "3px"}),
+                            html.Span(str(row['name']) if pd.notna(row['name']) else "", 
+                                     style={"display": "block", "fontSize": "11px"})
+                        ])
+                    )
+                ],
+                # className="portfolio-marker"
+            )
+            portfolio_markers.append(marker)
+        print(f"Time taken to create portfolio markers: {dt.datetime.now() - stime}")
         
-        return html.Div(portfolio_cards), count_text
+        # Combine existing elements with event polygon and new markers
+        # updated_children = filtered_children + [event_polygon_element] + portfolio_markers
+        updated_children = updated_children + portfolio_markers
+        
+        print(f'Time taken to combine elements, {len(updated_children)} children: {dt.datetime.now() - stime}')
+        return viewport, html.Div(portfolio_cards), count_text, portfolio_data, updated_children
         
     except Exception as e:
         print(f"Error fetching portfolios: {e}")
-        return html.Div(
+        return viewport, html.Div(
             f"Error loading portfolios: {str(e)}",
             style={
                 "color": "#FF6B6B",
@@ -979,139 +1043,99 @@ def update_portfolio_list(event_name):
                 "textAlign": "center",
                 "padding": "20px"
             }
-        ), "Error"
-        
-    # except Exception as e:
-    #     print(f"Error fetching events: {e}")
-    #     print("Returning empty list")
-    #     return [], "Select an event...", False, None
+        ), "Error", [], children
 
-# # Callback to populate table dropdown when schema is selected
-# @app.callback(
-#     [Output('table-dropdown', 'options'),
-#      Output('table-dropdown', 'placeholder'),
-#      Output('table-dropdown', 'disabled'),
-#      Output('table-dropdown', 'value')],
-#     Input('schema-dropdown', 'value'),
-#     State('catalog-dropdown', 'value'),
-#     prevent_initial_call=False
-# )
-# def populate_tables(selected_schema, selected_catalog):
-#     """Populate the table dropdown when a schema is selected"""
-#     # print(f"Populating tables for schema: {selected_schema}, catalog: {selected_catalog}")
+@app.callback(
+    # Output('clicked-portfolio', 'data'),
+    [Output({"type": "portfolio-card", "index": dash.dependencies.ALL}, "style"),
+     Output({"type": "portfolio-marker", "index": dash.dependencies.ALL}, "icon")],
+    [Input({"type": "portfolio-card", "index": dash.dependencies.ALL}, "n_clicks"),
+     Input({"type": "portfolio-marker", "index": dash.dependencies.ALL}, "n_clicks")],
+    [State({"type": "portfolio-card", "index": dash.dependencies.ALL}, "id"),
+     State({"type": "portfolio-marker", "index": dash.dependencies.ALL}, "id"),
+     State('portfolio-data-store', 'data'),
+     State('clicked-portfolio', 'data')],
+    prevent_initial_call=True
+)
+def handle_portfolio_click(card_clicks, marker_clicks, card_ids, marker_ids, portfolio_data, current_clicked):
+    """Handle clicks on portfolio cards or markers - only updates highlighting, no data reload"""
+    # print(f"PORTFOLIO CLICK CALLBACK: card_clicks: {card_clicks}, marker_clicks: {marker_clicks}, card_ids: {card_ids}, marker_ids: {marker_ids}, current_clicked: {current_clicked}")
+    print("PORTFOLIO CLICK CALLBACK")
+    # print(f"portfolio_data: {portfolio_data}")
     
-#     global load_defaults
-#     global default_table
-
-#     if (not selected_schema or not selected_catalog) and default_table is None:
-#         return [], "Select a table...", True, None
+    ctx = callback_context
     
-#     try:
-#         print(f"Fetching tables for schema {selected_catalog}.{selected_schema}...")
-#         tables = get_tables(selected_catalog, selected_schema)
-#         print(f"Retrieved tables: {tables}")
-#         return tables, "Select a table...", False, default_table if load_defaults else None
-#     except Exception as e:
-#         print(f"Error fetching tables for schema {selected_catalog}.{selected_schema}: {e}")
-#         print("ASSUMING NOT AVAILABLE")
-#         return [{'label': 'NOT AVAILABLE', 'value': 'NOT AVAILABLE'}], "Select a table...", False, None
-
-# # Callback to populate column dropdown when table is selected
-# @app.callback(
-#     [Output('column-dropdown', 'options'),
-#      Output('column-dropdown', 'placeholder'),
-#      Output('column-dropdown', 'disabled'),
-#      Output('column-dropdown', 'value')],
-#     Input('table-dropdown', 'value'),
-#     [State('catalog-dropdown', 'value'),
-#      State('schema-dropdown', 'value')],
-#     prevent_initial_call=False
-# )
-# def populate_columns(selected_table, selected_catalog, selected_schema):
-#     """Populate the column dropdown when a table is selected"""
-#     # print(f"Populating columns for table: {selected_table}, schema: {selected_schema}, catalog: {selected_catalog}")
-
-#     global load_defaults
-#     global default_column
-
-#     if (not selected_table or not selected_catalog or not selected_schema) and default_column is None:
-#         return [], "Select a column...", True, None
+    if not ctx.triggered:
+        return no_update
     
-#     try:
-#         print(f"Fetching columns for table {selected_catalog}.{selected_schema}.{selected_table}...")
-#         columns = get_columns(selected_catalog, selected_schema, selected_table)
-#         print(f"Retrieved columns: {columns}")
-#         return columns, "Select a column...", False, default_column if load_defaults else None
-#     except Exception as e:
-#         print(f"Error fetching columns for table {selected_catalog}.{selected_schema}.{selected_table}: {e}")
-#         print("ASSUMING NOT AVAILABLE")
-#         return ['NOT AVAILABLE'], "Select a column...", False, None
+    triggered_id = ctx.triggered[0]['prop_id']
+    triggered_dict = json.loads(triggered_id.split('.')[0])
+    portfolio_id = triggered_dict['index']
+    core = [x['core_polygon'] for x in portfolio_data]
+    secondary = [x['secondary_polygon'] for x in portfolio_data]
+    # print(f"type(core), type(secondary): {type(core)}, {type(secondary)}")
+    # custom_icon = dict(
+    #     iconUrl="https://leafletjs.com/examples/custom-icons/leaf-green.png",
+    #     shadowUrl="https://leafletjs.com/examples/custom-icons/leaf-shadow.png",
+    #     iconSize=[38, 95],
+    #     shadowSize=[50, 64],
+    #     iconAnchor=[22, 94],
+    #     shadowAnchor=[4, 62],
+    #     popupAnchor=[-3, -76],
+    # )
+    icon_style_core = dict(iconUrl=svg_pin_icon("#4CAF50"), iconSize=[40, 40], iconAnchor=[20, 40])
+    icon_style_secondary = dict(iconUrl=svg_pin_icon("#FFFF33"), iconSize=[40, 40], iconAnchor=[20, 40])
+    icon_style_clicked = dict(iconUrl=svg_pin_icon("#FF0000"), iconSize=[60, 60], iconAnchor=[30, 60])
+    card_style_core = {
+        "backgroundColor": "#2C2C2C",
+        "padding": "12px",
+        "marginBottom": "10px",
+        "borderRadius": "6px",
+        "border": "2px solid #4CAF50",
+        "fontFamily": "Helvetica",
+        "fontSize": "12px",
+        "cursor": "pointer",
+        "transition": "all 0.3s ease",
+        "width": "100%",
+        "textAlign": "left"
+    }
+    card_style_secondary = {
+        **card_style_core,
+        "backgroundColor": "#2C2C2C",
+        "border": "2px solid #FFFF33",
+        "boxShadow": "0 4px 8px rgba(255, 255, 51, 0.3)",
+    }
+    card_style_clicked = {
+        **card_style_core,
+        "backgroundColor": "#2C2C2C",
+        "border": "2px solid #FF0000",
+        "boxShadow": "0 4px 8px rgba(76, 175, 80, 0.3)",
+        "transform": "translateX(5px)"
+    }
 
-# # Callback to validate column and show description
-# @app.callback(
-#     [Output('column-description', 'children'),
-#      Output('refresh-button', 'disabled'),
-#      Output('refresh-button', 'style'),
-#      Output('refresh-button', 'title')],
-#     [Input('column-dropdown', 'value'),
-#      Input('catalog-dropdown', 'value'),
-#      Input('schema-dropdown', 'value'),
-#      Input('table-dropdown', 'value')],
-#     prevent_initial_call=False
-# )
-# def validate_column(selected_column, selected_catalog, selected_schema, selected_table):
-#     """Validate the selected column and return description"""
-#     disabled_style = {
-#         "backgroundColor": "#666666",
-#         "color": "#CCCCCC",
-#         "cursor": "not-allowed",
-#         "borderRadius": "4px",
-#         "fontSize": "14px",
-#         "fontFamily": "Helvetica",
-#         "fontWeight": "bold",
-#         "width": "150px",
-#         "height": "35px",
-#         "border": "1px solid #999999",
-#         "marginTop": "20px",
-#         "opacity": "0.6"
-#     }
-#     enabled_style = {
-#         "backgroundColor": "#3A3A3A",
-#         "color": "#FFFFFF",
-#         "cursor": "pointer",
-#         "borderRadius": "4px",
-#         "fontSize": "14px",
-#         "fontFamily": "Helvetica",
-#         "fontWeight": "bold",
-#         "width": "150px",
-#         "height": "35px",
-#         "border": "1px solid #FFFFFF",
-#         "marginTop": "20px"
-#     }
+    triggered_dict = json.loads(triggered_id.split('.')[0])
+    portfolio_id = triggered_dict['index']
     
-#     if not selected_column or not selected_catalog or not selected_schema or not selected_table:
-#         return "", True, disabled_style, "Select a valid H3 column"
+    card_styles = []
+    marker_icons = []
+    for i in range(len(card_ids)):
+        if card_ids[i]["index"] == portfolio_id:
+            card_style = card_style_clicked
+            marker_icon = icon_style_clicked
+        elif core[i]:
+            card_style = card_style_core
+            marker_icon = icon_style_core
+        elif secondary[i]:
+            card_style = card_style_secondary
+            marker_icon = icon_style_secondary
+        card_styles.append(card_style)
+        marker_icons.append(marker_icon)
+
+    # card_styles = [card_style_clicked if x["index"] == portfolio_id else card_style_base for x in card_ids]
+    # marker_icons = [icon_style_clicked if x["index"] == portfolio_id else icon_style_base for x in marker_ids]
+
+    return card_styles, marker_icons
     
-#     print(f"Validating column: {selected_column}, table: {selected_table}, schema: {selected_schema}, catalog: {selected_catalog}")
-
-#     try:
-#         resolution_query = f"SELECT h3_resolution({selected_column}) as resolution FROM {selected_catalog}.{selected_schema}.{selected_table} LIMIT 1"
-#         column_resolution = sqlQuery(resolution_query)['resolution'].iloc[0]
-#         # print(f"Column resolution: {column_resolution}")
-
-#         count_query = f"SELECT COUNT(*) as count FROM {selected_catalog}.{selected_schema}.{selected_table} WHERE {selected_column} IS NOT NULL"
-#         count_result = sqlQuery(count_query)['count'].iloc[0]
-#         # print(f"Count result: {count_result}")
-
-#         if column_resolution is None or column_resolution == 0 or count_result == 0:
-#             print("Column resolution is None or count is 0.")
-#             return "Column is not valid H3", True, disabled_style, "Must select a valid H3 column"
-#         else:
-#             print("Column resolution is valid. Returning columns.")
-#             return f"Column resolution: {column_resolution}; Row count: {format(count_result, ',')}", False, enabled_style, "Refresh map"
-#     except Exception as e:
-#         print(f"Column is not valid H3: {e}")
-#         return "Column is not valid H3", True, disabled_style, "Must select a valid H3 column"
 
 if __name__ == "__main__":
     app.run(debug=True)

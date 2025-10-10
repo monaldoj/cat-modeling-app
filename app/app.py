@@ -880,7 +880,7 @@ def update_portfolio_list_and_markers(event_name, children):
         buffer_polygon_element = dl.Polygon(id={"type": "event-polygon", "index": "buffer-polygon-secondary"}, positions=buffer_polygon, color="#FFFF33", fillOpacity=0.05)
         
         # Filter updated_children to only include elements where x['props']['positions'] coordinates overlap with the viewport coordinates using shapely
-        viewport_filter = wkt.loads(event_wkt)
+        viewport_filter = wkt.loads(buffer_wkt)
         filtered_children = []
         for child in children:
             if child['props']['id']['type'] == 'hex-polygon':
@@ -1085,7 +1085,7 @@ def handle_portfolio_click(card_clicks, marker_clicks, card_ids, marker_ids, por
     # )
     icon_style_core = dict(iconUrl=svg_pin_icon("#4CAF50"), iconSize=[40, 40], iconAnchor=[20, 40])
     icon_style_secondary = dict(iconUrl=svg_pin_icon("#FFFF33"), iconSize=[40, 40], iconAnchor=[20, 40])
-    icon_style_clicked = dict(iconUrl=svg_pin_icon("#3A3A3A"), iconSize=[60, 60], iconAnchor=[30, 60])
+    icon_style_clicked = dict(iconUrl=svg_pin_icon("#FF0000"), iconSize=[60, 60], iconAnchor=[30, 60])
     card_style_core = {
         "backgroundColor": "#2C2C2C",
         "padding": "12px",
@@ -1104,12 +1104,11 @@ def handle_portfolio_click(card_clicks, marker_clicks, card_ids, marker_ids, por
         "backgroundColor": "#2C2C2C",
         "border": "2px solid #FFFF33",
         "boxShadow": "0 4px 8px rgba(255, 255, 51, 0.3)",
-        "transform": "translateX(5px)"
     }
     card_style_clicked = {
         **card_style_core,
         "backgroundColor": "#2C2C2C",
-        "border": "2px solid #FFFFFF",
+        "border": "2px solid #FF0000",
         "boxShadow": "0 4px 8px rgba(76, 175, 80, 0.3)",
         "transform": "translateX(5px)"
     }
