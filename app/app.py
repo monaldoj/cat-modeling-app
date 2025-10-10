@@ -103,7 +103,7 @@ def sqlQuery(query: str) -> pd.DataFrame:
             df = pd.DataFrame(rows, columns=columns)
         return df
 
-def fmapi_stream(clicked_portfolio_data, event_name):
+def fmapi_stream(clicked_property_data, event_name):
     global response_list
     global stream_complete
 
@@ -111,7 +111,7 @@ def fmapi_stream(clicked_portfolio_data, event_name):
     response_list = []
     stream_complete = False
 
-    if clicked_portfolio_data and event_name:
+    if clicked_property_data and event_name:
         databricks_host = "https://" + get_databricks_server_hostname()
         databricks_token = get_databricks_token()
         model = 'databricks-meta-llama-3-3-70b-instruct'
@@ -129,7 +129,7 @@ def fmapi_stream(clicked_portfolio_data, event_name):
             "model": model,
             "messages": [
                 {"role": "system", "content": "You are an insurance risk assessor. You are given a property and you need to write a brief payout assessment of the property with respect to a catasrophic event."},
-                {"role": "user", "content": f"Please write a brief payout assessment of the potential damage to the following property as inflicted by the catastrophic event: {event_name} \n\n {clicked_portfolio_data}"}
+                {"role": "user", "content": f"Please write a one-sentence payout assessment of the potential damage to the following property as inflicted by the catastrophic event: {event_name} \n\n {clicked_property_data}"}
             ],
             "max_tokens": 256,
             "stream": True  # Enable streaming
@@ -256,7 +256,7 @@ def get_event_details(event_name):
             # print(catalogs)
         return event_details
 
-def get_affected_portfolios(event_name=None):
+def get_affected_properties(event_name=None):
     DATABRICKS_SERVER_HOSTNAME = get_databricks_server_hostname()
     DATABRICKS_TOKEN = get_databricks_token()
     with sql.connect(
@@ -561,9 +561,9 @@ def data_to_polygons(map_data):
 app.layout = html.Div(
     [
         dcc.Location(id="url"),
-        dcc.Store(id='portfolio-data-store', data=[]),
-        dcc.Store(id='highlighted-portfolio', data=None),
-        dcc.Store(id='clicked-portfolio', data=None),
+        dcc.Store(id='property-data-store', data=[]),
+        dcc.Store(id='highlighted-property', data=None),
+        dcc.Store(id='clicked-property', data=None),
         # Add dropdown selection controls at the top
         html.Div(
             [
@@ -592,53 +592,6 @@ app.layout = html.Div(
                     ],
                     style={"display": "inline-block", "marginRight": "20px"}
                 ),
-                # html.Div(
-                #     [
-                #         html.Label("Table:", style={"color": "#FFFFFF", "fontFamily": "Helvetica", "fontWeight": "bold", "marginRight": "10px"}),
-                #         dcc.Dropdown(
-                #             id="table-dropdown",
-                #             placeholder="Loading default...",
-                #             disabled=True,
-                #             style={"width": "200px", "backgroundColor": "#FFFFFF", "fontFamily": "Helvetica", "color": "#3A3A3A"},
-                #         )
-                #     ],
-                #     style={"display": "inline-block", "marginRight": "20px"}
-                # ),
-                # html.Div(
-                #     [
-                #         html.Label("Column:", style={"color": "#FFFFFF", "fontFamily": "Helvetica", "fontWeight": "bold", "marginRight": "10px"}),
-                #         dcc.Dropdown(
-                #             id="column-dropdown",
-                #             placeholder="Loading default...",
-                #             disabled=True,
-                #             style={"width": "200px", "backgroundColor": "#FFFFFF", "fontFamily": "Helvetica", "color": "#3A3A3A"},
-                #         ),
-                #     ],
-                #     style={"display": "inline-block", "marginRight": "20px"}
-                # ),
-                # html.Div(
-                #     [                        
-                #         dcc.Loading(
-                #             id="loading-spinner",
-                #             type="circle",  # options: "default", "circle", "dot", "cube"
-                #             children=html.P(
-                #                             id="column-description",
-                #                             style={
-                #                                 "color": "#FFFFFF", 
-                #                                 "fontFamily": "Helvetica", 
-                #                                 "fontSize": "14px",
-                #                                 "margin": "0",
-                #                                 "display": "inline-block",
-                #                                 "alignItems": "stretch",
-                #                                 "verticalAlign": "middle"
-                #                             }
-                #                         ),
-                #             color="#FFFFFF",
-                #             style={"transform": "scale(0.5)"},
-                #         ),
-                #     ],
-                #     style={"display": "inline-block", "marginRight": "20px", "alignItems": "stretch"}
-                # ),
             ],
             style={
                 "backgroundColor": "#3A3A3A",
@@ -648,7 +601,7 @@ app.layout = html.Div(
                 "boxShadow": "0 2px 4px rgba(0,0,0,0.3)"
             }
         ),
-        # Two column layout for map and portfolio list
+        # Two column layout for map and property list
         html.Div(
             [
                 # Left column - Map (75%)
@@ -710,7 +663,7 @@ app.layout = html.Div(
                             overlay_style={"visibility":"visible", "filter": "blur(3px)"},
                         ),
                                 html.Div(
-                        children="Select an affected property from the list or click on a portfolio marker on the map.",
+                        children="Click the 'AI Assessment' button on any affected property to generate a risk assessment.",
                         id="map-textbox",
                         style={
                             "font-family": "Helvetica",
@@ -732,7 +685,7 @@ app.layout = html.Div(
                     ],
                     style={"width": "75%", "display": "inline-block", "verticalAlign": "top", "position": "relative"}
                 ),
-                # Right column - Portfolio List (25%)
+                # Right column - Property List (25%)
                 html.Div(
                     [
                         html.Div(
@@ -745,7 +698,7 @@ app.layout = html.Div(
                                            "marginBottom": "15px",
                                            "textAlign": "center"
                                        }),
-                                html.Div(id="portfolio-count",
+                                html.Div(id="property-count",
                                         style={
                                             "color": "#CCCCCC",
                                             "fontFamily": "Helvetica",
@@ -754,10 +707,10 @@ app.layout = html.Div(
                                             "textAlign": "center"
                                         }),
                                 dcc.Loading(
-                                    id="loading-portfolios",
+                                    id="loading-properties",
                                     type="circle",
                                     children=html.Div(
-                                        id="portfolio-list",
+                                        id="property-list",
                                         style={
                                             "maxHeight": "calc(100vh - 150px)",
                                             "overflowY": "auto",
@@ -843,11 +796,11 @@ def update_map(n_clicks, center, zoom, bounds, catastrophe_type, event_name, chi
         
         new_polygons = data_to_polygons(new_map_data)
 
-        # Keep event polygon and portfolio markers in children
+        # Keep event polygon and property markers in children
         filtered_children = [x for x in children 
                            if 'id' in x.get('props', {}) 
                            and (isinstance(x['props']['id'], dict) 
-                                and x['props']['id'].get('type') in ['event-polygon', 'portfolio-marker'])]
+                                and x['props']['id'].get('type') in ['event-polygon', 'property-marker'])]
         polygons = new_polygons + filtered_children
 
         print("Map refreshed successfully!")
@@ -918,19 +871,19 @@ def populate_events(pathname):
         print("Returning empty list")
         return [], "Select an event...", False, None
 
-# Callback to update both portfolio list and markers when event is selected
+# Callback to update both property list and markers when event is selected
 @app.callback(
     [Output('map', 'viewport'),
-     Output('portfolio-list', 'children'),
-     Output('portfolio-count', 'children'),
-     Output('portfolio-data-store', 'data'),
+     Output('property-list', 'children'),
+     Output('property-count', 'children'),
+     Output('property-data-store', 'data'),
      Output('map-polygons', 'children')],
     [Input('event-dropdown', 'value')],
     [State('map-polygons', 'children')],
     prevent_initial_call=True
 )
-def update_portfolio_list_and_markers(event_name, children):
-    """Update the portfolio list and map markers when an event is selected"""
+def update_property_list_and_markers(event_name, children):
+    """Update the property list and map markers when an event is selected"""
     
     stime = dt.datetime.now()
 
@@ -940,7 +893,7 @@ def update_portfolio_list_and_markers(event_name, children):
 
     if event_name is None:
         return viewport, html.Div(
-            "Select an event to view affected portfolios",
+            "Select an event to view affected properties",
             style={
                 "color": "#CCCCCC",
                 "fontFamily": "Helvetica",
@@ -981,13 +934,13 @@ def update_portfolio_list_and_markers(event_name, children):
         updated_children.append(buffer_polygon_element)
         print(f"Time taken to create event polygon: {dt.datetime.now() - stime}")
 
-        # Fetch portfolios affected by the event
-        portfolios_df = get_affected_portfolios(event_name)
-        print(f"Time taken to fetch portfolios: {dt.datetime.now() - stime}")
+        # Fetch properties affected by the event
+        properties_df = get_affected_properties(event_name)
+        print(f"Time taken to fetch properties: {dt.datetime.now() - stime}")
         
-        if portfolios_df.empty:
+        if properties_df.empty:
             return viewport, html.Div(
-                "No portfolios found in this event area",
+                "No properties found in this event area",
                 style={
                     "color": "#CCCCCC",
                     "fontFamily": "Helvetica",
@@ -995,102 +948,126 @@ def update_portfolio_list_and_markers(event_name, children):
                     "textAlign": "center",
                     "padding": "20px"
                 }
-            ), "0 portfolios", [], updated_children
+            ), "0 properties", [], updated_children
         
-        # Store portfolio data for markers
-        portfolio_data = portfolios_df.to_dict('records')
+        # Store property data for markers
+        property_data = properties_df.to_dict('records')
         
-        # Create portfolio cards with hover interaction
-        portfolio_cards = []
-        for idx, row in portfolios_df.iterrows():
-            card = html.Button(
+        # Create property cards with hover interaction
+        property_cards = []
+        for idx, row in properties_df.iterrows():
+            card = html.Div(
                 [
-                    html.Div(
+                    html.Button(
                         [
                             html.Div(
                                 [
-                                    html.Strong("Portfolio ID: ", style={"color": "#FFFFFF"}),
-                                    html.Span(str(row['portfolio_id']), style={"color": "#CCCCCC"})
-                                ],
-                                style={"marginBottom": "5px"}
-                            ),
-                            html.Div(
-                                [
-                                    html.Strong("Property ID: ", style={"color": "#FFFFFF"}),
-                                    html.Span(str(row['property_id']), style={"color": "#CCCCCC"})
-                                ],
-                                style={"marginBottom": "5px"}
-                            ),
-                            html.Div(
-                                [
-                                    html.Strong("Property Value: ", style={"color": "#FFFFFF"}),
-                                    html.Span(f"${row['property_value']:,.2f}" if pd.notna(row['property_value']) else "N/A", 
-                                             style={"color": "#4CAF50", "fontWeight": "bold"})
-                                ],
-                                style={"marginBottom": "5px"}
-                            ),
-                            html.Div(
-                                [
-                                    html.Strong("Name: ", style={"color": "#FFFFFF"}),
-                                    html.Span(str(row['name']) if pd.notna(row['name']) else "N/A", 
-                                             style={"color": "#CCCCCC"})
-                                ],
-                                style={"marginBottom": "5px"}
-                            ),
-                            html.Div(
-                                [
-                                    html.Strong("Address: ", style={"color": "#FFFFFF"}),
-                                    html.Span(
-                                        f"{row['housenumber'] if pd.notna(row['housenumber']) else ''} "
-                                        f"{row['street'] if pd.notna(row['street']) else ''} "
-                                        f"{row['city'] if pd.notna(row['city']) else ''}, "
-                                        f"{row['state'] if pd.notna(row['state']) else ''} "
-                                        f"{row['postcode'] if pd.notna(row['postcode']) else ''}",
-                                        style={"color": "#CCCCCC"}
+                                    html.Div(
+                                        [
+                                            html.Strong("Portfolio ID: ", style={"color": "#FFFFFF"}),
+                                            html.Span(str(row['portfolio_id']), style={"color": "#CCCCCC"})
+                                        ],
+                                        style={"marginBottom": "5px"}
+                                    ),
+                                    html.Div(
+                                        [
+                                            html.Strong("Property ID: ", style={"color": "#FFFFFF"}),
+                                            html.Span(str(row['property_id']), style={"color": "#CCCCCC"})
+                                        ],
+                                        style={"marginBottom": "5px"}
+                                    ),
+                                    html.Div(
+                                        [
+                                            html.Strong("Property Value: ", style={"color": "#FFFFFF"}),
+                                            html.Span(f"${row['property_value']:,.2f}" if pd.notna(row['property_value']) else "N/A", 
+                                                     style={"color": "#4CAF50", "fontWeight": "bold"})
+                                        ],
+                                        style={"marginBottom": "5px"}
+                                    ),
+                                    html.Div(
+                                        [
+                                            html.Strong("Name: ", style={"color": "#FFFFFF"}),
+                                            html.Span(str(row['name']) if pd.notna(row['name']) else "N/A", 
+                                                     style={"color": "#CCCCCC"})
+                                        ],
+                                        style={"marginBottom": "5px"}
+                                    ),
+                                    html.Div(
+                                        [
+                                            html.Strong("Address: ", style={"color": "#FFFFFF"}),
+                                            html.Span(
+                                                f"{row['housenumber'] if pd.notna(row['housenumber']) else ''} "
+                                                f"{row['street'] if pd.notna(row['street']) else ''} "
+                                                f"{row['city'] if pd.notna(row['city']) else ''}, "
+                                                f"{row['state'] if pd.notna(row['state']) else ''} "
+                                                f"{row['postcode'] if pd.notna(row['postcode']) else ''}",
+                                                style={"color": "#CCCCCC"}
+                                            )
+                                        ],
+                                        style={"marginBottom": "5px"}
+                                    ),
+                                    html.Div(
+                                        [
+                                            html.Strong("Coordinates: ", style={"color": "#FFFFFF"}),
+                                            html.Span(
+                                                f"({row['lat']:.4f}, {row['lon']:.4f})",
+                                                style={"color": "#CCCCCC", "fontSize": "11px"}
+                                            )
+                                        ],
+                                        style={"marginBottom": "10px"}
+                                    ),
+                                    html.Button(
+                                        "🤖 AI Assessment",
+                                        id={"type": "ai-assessment-btn", "index": str(row['property_id'])},
+                                        n_clicks=0,
+                                        style={
+                                            "backgroundColor": "#4A4A4A",
+                                            "color": "#FFFFFF",
+                                            "padding": "8px 16px",
+                                            "border": "1px solid #5A5A5A",
+                                            "borderRadius": "4px",
+                                            "fontFamily": "Helvetica",
+                                            "fontSize": "11px",
+                                            "fontWeight": "bold",
+                                            "cursor": "pointer",
+                                            "width": "100%",
+                                            "textAlign": "center",
+                                            "transition": "background-color 0.2s ease",
+                                        }
                                     )
-                                ],
-                                style={"marginBottom": "5px"}
-                            ),
-                            html.Div(
-                                [
-                                    html.Strong("Coordinates: ", style={"color": "#FFFFFF"}),
-                                    html.Span(
-                                        f"({row['lat']:.4f}, {row['lon']:.4f})",
-                                        style={"color": "#CCCCCC", "fontSize": "11px"}
-                                    )
-                                ],
-                                style={"marginBottom": "0px"}
-                            ),
-                        ]
+                                ]
+                            )
+                        ],
+                        id={"type": "property-card", "index": str(row['property_id'])},
+                        n_clicks=0,
+                        className="property-card",
+                        style={
+                            "backgroundColor": "#2C2C2C",
+                            "padding": "12px",
+                            "marginBottom": "10px",
+                            "borderRadius": "6px",
+                            "border": "1px solid #4A4A4A",
+                            "fontFamily": "Helvetica",
+                            "fontSize": "12px",
+                            "cursor": "pointer",
+                            "transition": "all 0.3s ease",
+                            "width": "100%",
+                            "textAlign": "left"
+                        }
                     )
                 ],
-                id={"type": "portfolio-card", "index": str(row['property_id'])},
-                n_clicks=0,
-                className="portfolio-card",
-                style={
-                    "backgroundColor": "#2C2C2C",
-                    "padding": "12px",
-                    "marginBottom": "10px",
-                    "borderRadius": "6px",
-                    "border": "1px solid #4A4A4A",
-                    "fontFamily": "Helvetica",
-                    "fontSize": "12px",
-                    "cursor": "pointer",
-                    "transition": "all 0.3s ease",
-                    "width": "100%",
-                    "textAlign": "left"
-                }
+                style={"marginBottom": "10px"}
             )
-            portfolio_cards.append(card)
+            property_cards.append(card)
 
-        print(f"Time taken to create portfolio cards: {dt.datetime.now() - stime}")
-        count_text = f"{len(portfolios_df):,} propert{'ies' if len(portfolios_df) != 1 else 'y'} affected"
+        print(f"Time taken to create property cards: {dt.datetime.now() - stime}")
+        count_text = f"{len(properties_df):,} propert{'ies' if len(properties_df) != 1 else 'y'} affected"
         
-        # Add new portfolio markers with dl.Marker for better interactivity
-        portfolio_markers = []
-        for idx, row in portfolios_df.iterrows():
+        # Add new property markers with dl.Marker for better interactivity
+        property_markers = []
+        for idx, row in properties_df.iterrows():
             marker = dl.Marker(
-                id={"type": "portfolio-marker", "index": str(row['property_id'])},
+                id={"type": "property-marker", "index": str(row['property_id'])},
                 position=[row['lat'], row['lon']],
                 n_clicks=0,
                 children=[
@@ -1105,22 +1082,22 @@ def update_portfolio_list_and_markers(event_name, children):
                         ])
                     )
                 ],
-                # className="portfolio-marker"
+                # className="property-marker"
             )
-            portfolio_markers.append(marker)
-        print(f"Time taken to create portfolio markers: {dt.datetime.now() - stime}")
+            property_markers.append(marker)
+        print(f"Time taken to create property markers: {dt.datetime.now() - stime}")
         
         # Combine existing elements with event polygon and new markers
-        # updated_children = filtered_children + [event_polygon_element] + portfolio_markers
-        updated_children = updated_children + portfolio_markers
+        # updated_children = filtered_children + [event_polygon_element] + property_markers
+        updated_children = updated_children + property_markers
         
         print(f'Time taken to combine elements, {len(updated_children)} children: {dt.datetime.now() - stime}')
-        return viewport, html.Div(portfolio_cards), count_text, portfolio_data, updated_children
+        return viewport, html.Div(property_cards), count_text, property_data, updated_children
         
     except Exception as e:
-        print(f"Error fetching portfolios: {e}")
+        print(f"Error fetching properties: {e}")
         return viewport, html.Div(
-            f"Error loading portfolios: {str(e)}",
+            f"Error loading properties: {str(e)}",
             style={
                 "color": "#FF6B6B",
                 "fontFamily": "Helvetica",
@@ -1131,22 +1108,20 @@ def update_portfolio_list_and_markers(event_name, children):
         ), "Error", [], children
 
 @app.callback(
-    # Output('clicked-portfolio', 'data'),
-    [Output({"type": "portfolio-card", "index": dash.dependencies.ALL}, "style"),
-     Output({"type": "portfolio-marker", "index": dash.dependencies.ALL}, "icon")],
-    [Input({"type": "portfolio-card", "index": dash.dependencies.ALL}, "n_clicks"),
-     Input({"type": "portfolio-marker", "index": dash.dependencies.ALL}, "n_clicks")],
-    [State({"type": "portfolio-card", "index": dash.dependencies.ALL}, "id"),
-     State({"type": "portfolio-marker", "index": dash.dependencies.ALL}, "id"),
-     State('portfolio-data-store', 'data'),
-     State('clicked-portfolio', 'data')],
+    # Output('clicked-property', 'data'),
+    [Output({"type": "property-card", "index": dash.dependencies.ALL}, "style"),
+     Output({"type": "property-marker", "index": dash.dependencies.ALL}, "icon")],
+    [Input({"type": "property-card", "index": dash.dependencies.ALL}, "n_clicks"),
+     Input({"type": "property-marker", "index": dash.dependencies.ALL}, "n_clicks")],
+    [State({"type": "property-card", "index": dash.dependencies.ALL}, "id"),
+     State({"type": "property-marker", "index": dash.dependencies.ALL}, "id"),
+     State('property-data-store', 'data'),
+     State('clicked-property', 'data')],
     prevent_initial_call=True
 )
-def handle_portfolio_click(card_clicks, marker_clicks, card_ids, marker_ids, portfolio_data, current_clicked):
-    """Handle clicks on portfolio cards or markers - only updates highlighting, no data reload"""
-    # print(f"PORTFOLIO CLICK CALLBACK: card_clicks: {card_clicks}, marker_clicks: {marker_clicks}, card_ids: {card_ids}, marker_ids: {marker_ids}, current_clicked: {current_clicked}")
-    print("PORTFOLIO CLICK CALLBACK")
-    # print(f"portfolio_data: {portfolio_data}")
+def handle_property_click(card_clicks, marker_clicks, card_ids, marker_ids, property_data, current_clicked):
+    """Handle clicks on property cards or markers - only updates highlighting, no data reload"""
+    print("PROPERTY CLICK CALLBACK")
     
     ctx = callback_context
     
@@ -1155,9 +1130,9 @@ def handle_portfolio_click(card_clicks, marker_clicks, card_ids, marker_ids, por
     
     triggered_id = ctx.triggered[0]['prop_id']
     triggered_dict = json.loads(triggered_id.split('.')[0])
-    portfolio_id = triggered_dict['index']
-    core = [x['core_polygon'] for x in portfolio_data]
-    secondary = [x['secondary_polygon'] for x in portfolio_data]
+    property_id = triggered_dict['index']
+    core = [x['core_polygon'] for x in property_data]
+    secondary = [x['secondary_polygon'] for x in property_data]
     # print(f"type(core), type(secondary): {type(core)}, {type(secondary)}")
     # custom_icon = dict(
     #     iconUrl="https://leafletjs.com/examples/custom-icons/leaf-green.png",
@@ -1199,12 +1174,12 @@ def handle_portfolio_click(card_clicks, marker_clicks, card_ids, marker_ids, por
     }
 
     triggered_dict = json.loads(triggered_id.split('.')[0])
-    portfolio_id = triggered_dict['index']
+    property_id = triggered_dict['index']
     
     card_styles = []
     marker_icons = []
     for i in range(len(card_ids)):
-        if card_ids[i]["index"] == portfolio_id:
+        if card_ids[i]["index"] == property_id:
             card_style = card_style_clicked
             marker_icon = icon_style_clicked
         elif core[i]:
@@ -1216,21 +1191,17 @@ def handle_portfolio_click(card_clicks, marker_clicks, card_ids, marker_ids, por
         card_styles.append(card_style)
         marker_icons.append(marker_icon)
 
-    # card_styles = [card_style_clicked if x["index"] == portfolio_id else card_style_base for x in card_ids]
-    # marker_icons = [icon_style_clicked if x["index"] == portfolio_id else icon_style_base for x in marker_ids]
-
     return card_styles, marker_icons
     
 # # Callback to start iterative text update
 @app.callback(
     [Output("interval-component", "disabled", allow_duplicate=True)],
-    [Input({"type": "portfolio-card", "index": dash.dependencies.ALL}, "n_clicks"),
-     Input({"type": "portfolio-marker", "index": dash.dependencies.ALL}, "n_clicks")],
-    [State('portfolio-data-store', 'data'),
+    [Input({"type": "ai-assessment-btn", "index": dash.dependencies.ALL}, "n_clicks")],
+    [State('property-data-store', 'data'),
      State('event-dropdown', 'value')],
     prevent_initial_call=True
 )
-def start_text_update(card_clicks, marker_clicks, portfolio_data, event_name):
+def start_text_update(btn_clicks, property_data, event_name):
     print("START TEXT UPDATE:")
     
     ctx = callback_context
@@ -1240,11 +1211,11 @@ def start_text_update(card_clicks, marker_clicks, portfolio_data, event_name):
     
     triggered_id = ctx.triggered[0]['prop_id']
     triggered_dict = json.loads(triggered_id.split('.')[0])
-    portfolio_id = triggered_dict['index']
+    property_id = triggered_dict['index']
 
-    if portfolio_data:
-        clicked_portfolio_data = [x for x in portfolio_data if str(x['property_id']) == str(portfolio_id)][0]
-        threading.Thread(target=fmapi_stream, args=(clicked_portfolio_data, event_name,)).start()
+    if property_data:
+        clicked_property_data = [x for x in property_data if str(x['property_id']) == str(property_id)][0]
+        threading.Thread(target=fmapi_stream, args=(clicked_property_data, event_name,)).start()
         print("Turning on the interval-component")
         return False 
     else:

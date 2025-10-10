@@ -3,3 +3,14 @@
     transition: all 0.3s ease;
 }
 
+/* AI Assessment button hover effect */
+button[id*="ai-assessment-btn"]:hover {
+    background-color: #5A5A5A !important;
+    transform: translateY(-1px);
+    box-shadow: 0 2px 6px rgba(255, 255, 255, 0.2);
+}
+
+button[id*="ai-assessment-btn"]:active {
+    transform: translateY(0px);
+    background-color: #6A6A6A !important;
+}
