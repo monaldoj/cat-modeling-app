@@ -3,6 +3,7 @@ from databricks import sql
 from databricks.sdk.core import Config
 import pandas as pd
 import numpy as np
+from plotly.graph_objs.layout import updatemenu
 from shapely.geometry import Polygon
 import dash
 from dash import dcc, html, Input, Output, State, callback_context, no_update
@@ -585,7 +586,7 @@ def data_to_polygons(map_data):
             fillOpacity=style['fillOpacity']
             )
         )
-    print([x.fillColor for x in dlPolygons][0:7])
+    # print([x.fillColor for x in dlPolygons][0:7])
     # print(f"DATA TO POLYGONS TOOK: {dt.datetime.now() - stime}")
     return dlPolygons
 
@@ -679,7 +680,9 @@ app.layout = html.Div(
                                 dl.Map(
                                     [
                                         dl.TileLayer(url=tile_layer_url, attribution='© Mapbox © OpenStreetMap'),
-                                        dl.LayerGroup(id="map-polygons", children=[]) #dl.Polygon(color='#39FF14', positions=[[25.2, -81.6], [25.2, -79.8], [26.6, -79.8], [26.6, -81.6]])])
+                                        dl.LayerGroup(id="map-hex-polygons", children=[]),
+                                        dl.LayerGroup(id="map-event-polygons", children=[]),
+                                        dl.LayerGroup(id="map-property-markers", children=[]) #dl.Polygon(color='#39FF14', positions=[[25.2, -81.6], [25.2, -79.8], [26.6, -79.8], [26.6, -81.6]])])
                                         # dl.Polygon(color='#39FF14', positions=[[25.2, -81.6], [25.2, -79.8], [26.6, -79.8], [26.6, -81.6]])
                                     ],
                                     center=[39.8283, -98.5795],
@@ -773,7 +776,7 @@ app.layout = html.Div(
 
 # Add callback for refresh button and initial load
 @app.callback(
-    [Output('map-polygons', 'children', allow_duplicate=True),
+    [Output('map-hex-polygons', 'children', allow_duplicate=True),
      Output('refresh-button', 'style')],
     Input('refresh-button', 'n_clicks'),
     [State("map", "center"),
@@ -781,7 +784,7 @@ app.layout = html.Div(
      State("map", "bounds"),
      State("catastrophe-dropdown", "value"),
      State("event-dropdown", "value"),
-     State('map-polygons', 'children'),
+     State('map-hex-polygons', 'children'),
      ],
      prevent_initial_call=True
 )
@@ -828,21 +831,21 @@ def update_map(n_clicks, center, zoom, bounds, catastrophe_type, event_name, chi
         
         new_polygons = data_to_polygons(new_map_data)
 
-        print([x.fillColor for x in new_polygons][0:7])
+        # print([x.fillColor for x in new_polygons][0:7])
         # Keep event polygon and property markers in children
         stime = dt.datetime.now()
         # print(f"CHILDREN: {len(children)}, TIME: {dt.datetime.now()-stime}")
         # print(f"NEW POLYGONS: {len(new_polygons)}, TIME: {dt.datetime.now()-stime}")
-        filtered_children = [x for x in children 
-                           if 'id' in x.get('props', {}) 
-                           and (isinstance(x['props']['id'], dict) 
-                                and x['props']['id'].get('type') in ['event-polygon', 'property-marker'])]
-        # print(f"FILTERED CHILDREN: {len(filtered_children)}, TIME: {dt.datetime.now()-stime}")
-        polygons = new_polygons + filtered_children
+        # filtered_children = [x for x in children 
+        #                    if 'id' in x.get('props', {}) 
+        #                    and (isinstance(x['props']['id'], dict) 
+        #                         and x['props']['id'].get('type') in ['event-polygon', 'property-marker'])]
+        # # print(f"FILTERED CHILDREN: {len(filtered_children)}, TIME: {dt.datetime.now()-stime}")
+        # polygons = new_polygons + filtered_children
         # print(f"POLYGONS: {len(polygons)}, TIME: {dt.datetime.now()-stime}")
-        print([x.fillColor for x in polygons][0:7])
+        # print([x.fillColor for x in polygons][0:7])
         print("Map refreshed successfully!")
-        return polygons, active_style
+        return new_polygons, active_style
 
 
 # Callback to immediately update button style when clicked (before map update)
@@ -935,13 +938,15 @@ def populate_portfolio_dropdown(property_data):
      Output('property-list', 'children'),
      Output('property-agg', 'children'),
      Output('property-data-store', 'data'),
-     Output('map-polygons', 'children'),
+     Output('map-event-polygons', 'children'),
+     Output('map-property-markers', 'children'),
+     Output('map-hex-polygons', 'children'),
      Output('portfolio-dropdown', 'value')],
     [Input('event-dropdown', 'value')],
-    [State('map-polygons', 'children')],
+    [State('map-hex-polygons', 'children')],
     prevent_initial_call=True
 )
-def update_property_list_and_markers(event_name, children):
+def update_property_list_and_markers(event_name, hex_children):
     """Update the property list and map markers when an event is selected"""
     
     stime = dt.datetime.now()
@@ -960,7 +965,7 @@ def update_property_list_and_markers(event_name, children):
                 "textAlign": "center",
                 "padding": "20px"
             }
-        ), "", [], children, 'all'
+        ), "", [], [], [], hex_children, 'all'
     
     try:
         event_wkt = get_event_details(event_name)
@@ -978,19 +983,18 @@ def update_property_list_and_markers(event_name, children):
         
         # Filter updated_children to only include elements where x['props']['positions'] coordinates overlap with the viewport coordinates using shapely
         viewport_filter = wkt.loads(buffer_wkt)
-        filtered_children = []
-        for child in children:
-            if child['props']['id']['type'] == 'hex-polygon':
-                child_polygon = Polygon([(x[1], x[0]) for x in child['props']['positions']])
-                if child_polygon.is_valid and child_polygon.intersects(viewport_filter):
-                    filtered_children.append(child)
+        updated_hex_children = []
+        for child in hex_children:
+            child_polygon = Polygon([(x[1], x[0]) for x in child['props']['positions']])
+            if child_polygon.is_valid and child_polygon.intersects(viewport_filter):
+                updated_hex_children.append(child)
 
         print(f"Time taken to filter children: {dt.datetime.now() - stime}")
-        updated_children = filtered_children
         
         # updated_children = [x for x in children if x['props']['id']['type'] != 'event-polygon']
-        updated_children.append(event_polygon_element)
-        updated_children.append(buffer_polygon_element)
+        event_polygons_children = []
+        event_polygons_children.append(event_polygon_element)
+        event_polygons_children.append(buffer_polygon_element)
         print(f"Time taken to create event polygon: {dt.datetime.now() - stime}")
 
         # Fetch properties affected by the event
@@ -1007,7 +1011,7 @@ def update_property_list_and_markers(event_name, children):
                     "textAlign": "center",
                     "padding": "20px"
                 }
-            ), html.Div("0 properties"), [], updated_children, 'all'
+            ), html.Div("0 properties"), [], event_polygons_children, [], updated_hex_children, 'all'
         
         # Store property data for markers
         property_data = properties_df.to_dict('records')
@@ -1182,10 +1186,10 @@ def update_property_list_and_markers(event_name, children):
         
         # Combine existing elements with event polygon and new markers
         # updated_children = filtered_children + [event_polygon_element] + property_markers
-        updated_children = updated_children + property_markers
+        # updated_children = updated_children + property_markers
         
-        print(f'Time taken to combine elements, {len(updated_children)} children: {dt.datetime.now() - stime}')
-        return viewport, html.Div(property_cards), agg_div, property_data, updated_children, 'all'
+        print(f'Time taken to combine elements, {len(updated_hex_children)} children: {dt.datetime.now() - stime}')
+        return viewport, html.Div(property_cards), agg_div, property_data, event_polygons_children, property_markers, updated_hex_children, 'all'
             
     except Exception as e:
         print(f"Error fetching properties: {e}")
@@ -1259,11 +1263,11 @@ def handle_property_click(card_clicks, marker_clicks, card_ids, marker_ids, prop
 @app.callback(
     [Output('property-list', 'children', allow_duplicate=True),
      Output('property-agg', 'children', allow_duplicate=True),
-     Output('map-polygons', 'children', allow_duplicate=True)],
+     Output('map-property-markers', 'children', allow_duplicate=True)],
     [Input('portfolio-dropdown', 'value')],
     [State('property-data-store', 'data'),
      State('event-dropdown', 'value'),
-     State('map-polygons', 'children')],
+     State('map-property-markers', 'children')],
     prevent_initial_call=True
 )
 def filter_properties_by_portfolio(selected_portfolio_id, property_data, event_name, children):
@@ -1426,10 +1430,10 @@ def filter_properties_by_portfolio(selected_portfolio_id, property_data, event_n
     
     # Filter markers to only show properties in the selected portfolio
     # Remove old property markers and add new filtered ones
-    filtered_children = [x for x in children 
-                        if 'id' in x.get('props', {}) 
-                        and (isinstance(x['props']['id'], dict) 
-                             and x['props']['id'].get('type') != 'property-marker')]
+    # filtered_children = [x for x in children 
+    #                     if 'id' in x.get('props', {}) 
+    #                     and (isinstance(x['props']['id'], dict) 
+    #                          and x['props']['id'].get('type') != 'property-marker')]
     
     # Create new property markers for filtered properties
     property_markers = []
@@ -1454,9 +1458,9 @@ def filter_properties_by_portfolio(selected_portfolio_id, property_data, event_n
         )
         property_markers.append(marker)
     
-    updated_children = filtered_children + property_markers
+    # updated_children = filtered_children + property_markers
     
-    return html.Div(property_cards), agg_div, updated_children
+    return html.Div(property_cards), agg_div, property_markers
     
 # # Callback to start iterative text update
 @app.callback(
