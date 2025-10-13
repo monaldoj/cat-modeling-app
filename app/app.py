@@ -187,7 +187,7 @@ def get_data(catastrophe_type=None, resolution=9, bounds=None, column_resolution
                     WITH cell_agg AS (
                     SELECT
                         h3_toparent({column}, {resolution}) as h3_cell_id,
-                        AVG({catastrophe_type}) as value
+                        MAX({catastrophe_type}) as value
                         -- AVG(coalesce({catastrophe_type}, 0)) as value
                     FROM timo.cat_risk.cat_risk_scores_h3 -- {catalog}.{schema}.{table}
                     WHERE {f"h3_toparent({column}, {resolution}) IN (SELECT EXPLODE(H3_COVERASH3('{bounds_wkt}', {resolution})))" if bounds_wkt else "1=1"}
@@ -370,17 +370,17 @@ def create_legend(deciles):
 
 def zoom_to_h3_resolution(zoom):
     if zoom < 4:
-        return 4
+        return 3
     elif zoom < 8:
-        return 5
+        return 4
     elif zoom < 10:
-        return 6
+        return 5
     elif zoom < 12:
+        return 6
+    elif zoom < 13:
         return 7
     else:
         return 8
-    # elif zoom <= 13:
-    #     return 8
     # elif zoom < 14:
     #     return 8
     # elif zoom < 16:
@@ -526,6 +526,9 @@ def data_to_polygons(map_data):
         "features": []
     }
     dlPolygons = []
+
+    stime = dt.datetime.now()
+    print(f"DATA TO POLYGONS: {len(map_data)} rows, TIME: {stime}")
     for i in range(len(map_data)):
         hex_boundaries_polygon = [[coord[1], coord[0]] for coord in json.loads(map_data.iloc[i]['hex_boundary'])['coordinates'][0]]
         hex_boundaries_polygons.append(hex_boundaries_polygon)
@@ -552,6 +555,8 @@ def data_to_polygons(map_data):
             fillOpacity=style['fillOpacity']
             )
         )
+    print([x.fillColor for x in dlPolygons][0:7])
+    # print(f"DATA TO POLYGONS TOOK: {dt.datetime.now() - stime}")
     return dlPolygons
 
     # polygons = []
@@ -566,6 +571,7 @@ app.layout = html.Div(
         dcc.Store(id='highlighted-property', data=None),
         dcc.Store(id='clicked-property', data=None),
         dcc.Store(id='active-ai-assessment', data=None),
+        dcc.Store(id='selected-portfolio-id', data=None),
         # Add dropdown selection controls at the top
         html.Div(
             [
@@ -678,9 +684,22 @@ app.layout = html.Div(
                                            "color": "#FFFFFF", 
                                            "fontFamily": "Helvetica", 
                                            "fontWeight": "bold",
-                                           "marginBottom": "15px",
+                                           "marginBottom": "10px",
                                            "textAlign": "center"
                                        }),
+                                dcc.Dropdown(
+                                    id="portfolio-dropdown",
+                                    placeholder="All Portfolios",
+                                    value='all',
+                                    style={
+                                        "width": "100%",
+                                        "backgroundColor": "#FFFFFF",
+                                        "fontFamily": "Helvetica",
+                                        "fontSize": "12px",
+                                        "marginBottom": "15px"
+                                    },
+                                    clearable=True
+                                ),
                                 html.Div(id="property-agg",
                                         style={
                                             "color": "#CCCCCC",
@@ -779,13 +798,19 @@ def update_map(n_clicks, center, zoom, bounds, catastrophe_type, event_name, chi
         
         new_polygons = data_to_polygons(new_map_data)
 
+        print([x.fillColor for x in new_polygons][0:7])
         # Keep event polygon and property markers in children
+        stime = dt.datetime.now()
+        # print(f"CHILDREN: {len(children)}, TIME: {dt.datetime.now()-stime}")
+        # print(f"NEW POLYGONS: {len(new_polygons)}, TIME: {dt.datetime.now()-stime}")
         filtered_children = [x for x in children 
                            if 'id' in x.get('props', {}) 
                            and (isinstance(x['props']['id'], dict) 
                                 and x['props']['id'].get('type') in ['event-polygon', 'property-marker'])]
+        # print(f"FILTERED CHILDREN: {len(filtered_children)}, TIME: {dt.datetime.now()-stime}")
         polygons = new_polygons + filtered_children
-
+        # print(f"POLYGONS: {len(polygons)}, TIME: {dt.datetime.now()-stime}")
+        print([x.fillColor for x in polygons][0:7])
         print("Map refreshed successfully!")
         return polygons, active_style
 
@@ -854,13 +879,34 @@ def populate_events(pathname):
         print("Returning empty list")
         return [], "Select an event...", False, None
 
+# Callback to populate portfolio dropdown when properties are loaded
+@app.callback(
+    Output('portfolio-dropdown', 'options'),
+    Input('property-data-store', 'data'),
+    prevent_initial_call=True
+)
+def populate_portfolio_dropdown(property_data):
+    """Populate the portfolio dropdown with unique portfolio IDs from loaded properties"""
+    if not property_data:
+        return []
+    
+    # Extract unique portfolio IDs
+    portfolio_ids = sorted(list(set([prop['portfolio_id'] for prop in property_data])))
+    
+    # Create dropdown options with "All Portfolios" as the first option
+    options = [{'label': 'All Portfolios', 'value': 'all'}]
+    options.extend([{'label': f'Portfolio {pid}', 'value': pid} for pid in portfolio_ids])
+    
+    return options
+
 # Callback to update both property list and markers when event is selected
 @app.callback(
     [Output('map', 'viewport'),
      Output('property-list', 'children'),
      Output('property-agg', 'children'),
      Output('property-data-store', 'data'),
-     Output('map-polygons', 'children')],
+     Output('map-polygons', 'children'),
+     Output('portfolio-dropdown', 'value')],
     [Input('event-dropdown', 'value')],
     [State('map-polygons', 'children')],
     prevent_initial_call=True
@@ -884,7 +930,7 @@ def update_property_list_and_markers(event_name, children):
                 "textAlign": "center",
                 "padding": "20px"
             }
-        ), "", [], children
+        ), "", [], children, 'all'
     
     try:
         event_wkt = get_event_details(event_name)
@@ -931,7 +977,7 @@ def update_property_list_and_markers(event_name, children):
                     "textAlign": "center",
                     "padding": "20px"
                 }
-            ), html.Div("0 properties"), [], updated_children
+            ), html.Div("0 properties"), [], updated_children, 'all'
         
         # Store property data for markers
         property_data = properties_df.to_dict('records')
@@ -1109,7 +1155,7 @@ def update_property_list_and_markers(event_name, children):
         updated_children = updated_children + property_markers
         
         print(f'Time taken to combine elements, {len(updated_children)} children: {dt.datetime.now() - stime}')
-        return viewport, html.Div(property_cards), agg_div, property_data, updated_children
+        return viewport, html.Div(property_cards), agg_div, property_data, updated_children, 'all'
             
     except Exception as e:
         print(f"Error fetching properties: {e}")
@@ -1122,7 +1168,7 @@ def update_property_list_and_markers(event_name, children):
                 "textAlign": "center",
                 "padding": "20px"
             }
-        ), html.Div("Error"), [], children
+        ), html.Div("Error"), [], children, 'all'
 
 @app.callback(
     # Output('clicked-property', 'data'),
@@ -1209,6 +1255,223 @@ def handle_property_click(card_clicks, marker_clicks, card_ids, marker_ids, prop
         marker_icons.append(marker_icon)
 
     return card_styles, marker_icons
+
+# Callback to filter property cards and markers by portfolio ID
+@app.callback(
+    [Output('property-list', 'children', allow_duplicate=True),
+     Output('property-agg', 'children', allow_duplicate=True),
+     Output('map-polygons', 'children', allow_duplicate=True)],
+    [Input('portfolio-dropdown', 'value')],
+    [State('property-data-store', 'data'),
+     State('event-dropdown', 'value'),
+     State('map-polygons', 'children')],
+    prevent_initial_call=True
+)
+def filter_properties_by_portfolio(selected_portfolio_id, property_data, event_name, children):
+    """Filter property cards and markers based on selected portfolio ID"""
+    
+    if not property_data:
+        return no_update, no_update, no_update
+    
+    # If no portfolio is selected (cleared) or "all" is selected, show all properties
+    if selected_portfolio_id is None or selected_portfolio_id == 'all':
+        properties_df = pd.DataFrame(property_data)
+    else:
+        # Filter properties by portfolio_id
+        properties_df = pd.DataFrame([prop for prop in property_data if prop['portfolio_id'] == selected_portfolio_id])
+    
+    if properties_df.empty:
+        return html.Div(
+            "No properties found for this portfolio",
+            style={
+                "color": "#CCCCCC",
+                "fontFamily": "Helvetica",
+                "fontSize": "14px",
+                "textAlign": "center",
+                "padding": "20px"
+            }
+        ), html.Div("0 properties"), children
+    
+    # Create property cards with the same styling logic as original
+    property_cards = []
+    for idx, row in properties_df.iterrows():
+        card = html.Div(
+            [
+                html.Button(
+                    [
+                        html.Div(
+                            [
+                                html.Div(
+                                    [
+                                        html.Strong("Portfolio ID: ", style={"color": "#FFFFFF"}),
+                                        html.Span(str(row['portfolio_id']), style={"color": "#CCCCCC"})
+                                    ],
+                                    style={"marginBottom": "5px"}
+                                ),
+                                html.Div(
+                                    [
+                                        html.Strong("Property ID: ", style={"color": "#FFFFFF"}),
+                                        html.Span(str(row['property_id']), style={"color": "#CCCCCC"})
+                                    ],
+                                    style={"marginBottom": "5px"}
+                                ),
+                                html.Div(
+                                    [
+                                        html.Strong("Property Value: ", style={"color": "#FFFFFF"}),
+                                        html.Span(f"${row['property_value']:,.2f}" if pd.notna(row['property_value']) else "N/A", 
+                                                 style={"color": "#4CAF50", "fontWeight": "bold"})
+                                    ],
+                                    style={"marginBottom": "5px"}
+                                ),
+                                html.Div(
+                                    [
+                                        html.Strong("Name: ", style={"color": "#FFFFFF"}),
+                                        html.Span(str(row['name']) if pd.notna(row['name']) else "N/A", 
+                                                 style={"color": "#CCCCCC"})
+                                    ],
+                                    style={"marginBottom": "5px"}
+                                ),
+                                html.Div(
+                                    [
+                                        html.Strong("Address: ", style={"color": "#FFFFFF"}),
+                                        html.Span(
+                                            f"{row['housenumber'] if pd.notna(row['housenumber']) else ''} "
+                                            f"{row['street'] if pd.notna(row['street']) else ''} "
+                                            f"{row['city'] if pd.notna(row['city']) else ''}, "
+                                            f"{row['state'] if pd.notna(row['state']) else ''} "
+                                            f"{row['postcode'] if pd.notna(row['postcode']) else ''}",
+                                            style={"color": "#CCCCCC"}
+                                        )
+                                    ],
+                                    style={"marginBottom": "5px"}
+                                ),
+                                html.Div(
+                                    [
+                                        html.Strong("Coordinates: ", style={"color": "#FFFFFF"}),
+                                        html.Span(
+                                            f"({row['lat']:.4f}, {row['lon']:.4f})",
+                                            style={"color": "#CCCCCC", "fontSize": "11px"}
+                                        )
+                                    ],
+                                    style={"marginBottom": "10px"}
+                                ),
+                                html.Button(
+                                    "🤖 AI Assessment",
+                                    id={"type": "ai-assessment-btn", "index": str(row['property_id'])},
+                                    n_clicks=0,
+                                    style={
+                                        "backgroundColor": "#4A4A4A",
+                                        "color": "#FFFFFF",
+                                        "padding": "8px 16px",
+                                        "border": "1px solid #5A5A5A",
+                                        "borderRadius": "4px",
+                                        "fontFamily": "Helvetica",
+                                        "fontSize": "11px",
+                                        "fontWeight": "bold",
+                                        "cursor": "pointer",
+                                        "width": "100%",
+                                        "textAlign": "center",
+                                        "transition": "background-color 0.2s ease",
+                                    }
+                                ),
+                                html.Div(
+                                    id={"type": "ai-assessment-text", "index": str(row['property_id'])},
+                                    style={
+                                        "display": "none",
+                                        "marginTop": "10px",
+                                        "padding": "10px",
+                                        "backgroundColor": "#1A1A1A",
+                                        "borderRadius": "4px",
+                                        "border": "1px solid #5A5A5A",
+                                        "color": "#FFFFFF",
+                                        "fontFamily": "Helvetica",
+                                        "fontSize": "11px",
+                                        "lineHeight": "1.5",
+                                        "whiteSpace": "pre-wrap"
+                                    }
+                                )
+                            ]
+                        )
+                    ],
+                    id={"type": "property-card", "index": str(row['property_id'])},
+                    n_clicks=0,
+                    className="property-card",
+                    style={
+                        "backgroundColor": "#2C2C2C",
+                        "padding": "12px",
+                        "marginBottom": "10px",
+                        "borderRadius": "6px",
+                        "border": "2px solid #4CAF50" if row['core_polygon'] else "2px solid #FFFF33",
+                        "fontFamily": "Helvetica",
+                        "fontSize": "12px",
+                        "cursor": "pointer",
+                        "transition": "all 0.3s ease",
+                        "width": "100%",
+                        "textAlign": "left"
+                    }
+                )
+            ],
+            style={"marginBottom": "10px"}
+        )
+        property_cards.append(card)
+    
+    # Update aggregate statistics
+    total_count = len(properties_df)
+    total_value = properties_df['property_value'].sum()
+    total_payout = properties_df['property_payout'].sum()
+    
+    agg_div = html.Div([
+        html.Div([
+            html.Span(f"{total_count:,} ", style={"fontWeight": "bold", "color": "#FFFFFF"}),
+            html.Span(f"propert{'ies' if total_count != 1 else 'y'} affected", style={"color": "#CCCCCC"})
+        ], style={"marginBottom": "5px"}),
+        html.Div([
+            html.Span("Total affected property value: ", style={"color": "#CCCCCC"}),
+            html.Span(f"${total_value:,.2f}", style={"fontWeight": "bold", "color": "#4CAF50"})
+        ], style={"marginBottom": "5px"}),
+        html.Div([
+            html.Span("Total proposed payout: ", style={"color": "#CCCCCC"}),
+            html.Span(f"${total_payout:,.2f}", style={"fontWeight": "bold", "color": "#4CAF50"})
+        ])
+    ])
+    
+    # Filter markers to only show properties in the selected portfolio
+    # Remove old property markers and add new filtered ones
+    filtered_children = [x for x in children 
+                        if 'id' in x.get('props', {}) 
+                        and (isinstance(x['props']['id'], dict) 
+                             and x['props']['id'].get('type') != 'property-marker')]
+    
+    # Create new property markers for filtered properties
+    property_markers = []
+    for idx, row in properties_df.iterrows():
+        marker = dl.Marker(
+            id={"type": "property-marker", "index": str(row['property_id'])},
+            position=[row['lat'], row['lon']],
+            n_clicks=0,
+            children=[
+                dl.Tooltip(
+                    children=html.Div([
+                        html.Strong(f"Portfolio ID: {row['portfolio_id']}", style={"display": "block", "marginBottom": "5px"}),
+                        html.Strong(f"Property ID: {row['property_id']}", style={"display": "block", "marginBottom": "5px"}),
+                        html.Span(f"Value: ${row['property_value']:,.2f}" if pd.notna(row['property_value']) else "Value: N/A", 
+                                 style={"display": "block", "marginBottom": "3px"}),
+                        html.Span(str(row['name']) if pd.notna(row['name']) else "", 
+                                 style={"display": "block", "fontSize": "11px"})
+                    ])
+                )
+            ],
+            icon=dict(
+                iconUrl=svg_pin_icon("#4CAF50" if row['core_polygon'] else "#FFFF33"),
+                iconSize=[40, 40],
+                iconAnchor=[20, 40]
+            )
+        )
+        property_markers.append(marker)
+    
+    updated_children = filtered_children + property_markers
+    
+    return html.Div(property_cards), agg_div, updated_children
     
 # # Callback to start iterative text update
 @app.callback(
@@ -1220,12 +1483,15 @@ def handle_property_click(card_clicks, marker_clicks, card_ids, marker_ids, prop
     prevent_initial_call=True
 )
 def start_text_update(btn_clicks, property_data, event_name):
-    print("START TEXT UPDATE:")
-    
+    print(f"START TEXT UPDATE: {btn_clicks} clicks")
+
+    if max(btn_clicks) == 0:
+        return True, None
+
     ctx = callback_context
     
     if not ctx.triggered:
-        return no_update
+        return True, None
     
     triggered_id = ctx.triggered[0]['prop_id']
     triggered_dict = json.loads(triggered_id.split('.')[0])
