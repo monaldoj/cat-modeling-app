@@ -225,7 +225,7 @@ def get_data(catastrophe_type=None, resolution=9, bounds=None, column_resolution
                     GROUP BY h3_cell_id
                     HAVING value > 0
                     )
-                    SELECT h3_boundaryasgeojson(h3_cell_id) as hex_boundary,
+                    SELECT h3_cell_id, h3_boundaryasgeojson(h3_cell_id) as hex_boundary,
                             value
                     FROM cell_agg
                     -- ORDER BY value DESC
@@ -548,7 +548,8 @@ def polygon_clip_to_bounds(polygon_coords, bounds):
 deciles = create_linear_color_scale(np.linspace(0.0, 1.0, 11))
 legend = create_legend(deciles)
 
-def data_to_polygons(map_data):
+def data_to_polygons(map_data, catastrophe_type=None):
+    print("map_data:", map_data)
     hex_centers_lats = []
     hex_centers_lngs = []
     hex_boundaries_polygons = []
@@ -561,6 +562,7 @@ def data_to_polygons(map_data):
     stime = dt.datetime.now()
     print(f"DATA TO POLYGONS: {len(map_data)} rows, TIME: {stime}")
     for i in range(len(map_data)):
+        hex_cell_id = map_data.iloc[i]['h3_cell_id']
         hex_boundaries_polygon = [[coord[1], coord[0]] for coord in json.loads(map_data.iloc[i]['hex_boundary'])['coordinates'][0]]
         hex_boundaries_polygons.append(hex_boundaries_polygon)
         
@@ -576,8 +578,13 @@ def data_to_polygons(map_data):
 
         style = style_function(map_data.iloc[i]['value'].item(), deciles)
 
+        # Create a deterministic ID that includes catastrophe type
+        # This ensures polygons are recreated when colors change due to different data
+        # while maintaining performance by reusing polygons with same ID when data is identical
+        hex_id = f"{hex_cell_id}-{catastrophe_type}" if catastrophe_type else str(hex_cell_id)
+
         dlPolygons.append(dl.Polygon(
-            id={"type": "hex-polygon", "index": "hex-polygon-" + str(i)},
+            id={"type": "hex-polygon", "index": hex_id},
             positions=hex_boundaries_polygon,
             fillColor=style['fillColor'],
             color=style['color'],
@@ -783,12 +790,12 @@ app.layout = html.Div(
      State("map", "zoom"),
      State("map", "bounds"),
      State("catastrophe-dropdown", "value"),
-     State("event-dropdown", "value"),
-     State('map-hex-polygons', 'children'),
+    #  State("event-dropdown", "value"),
+    #  State('map-hex-polygons', 'children'),
      ],
      prevent_initial_call=True
 )
-def update_map(n_clicks, center, zoom, bounds, catastrophe_type, event_name, children):
+def update_map(n_clicks, center, zoom, bounds, catastrophe_type): #, event_name, children):
     # Define button styles
     active_style = {
         "backgroundColor": "#3A3A3A",
@@ -829,11 +836,13 @@ def update_map(n_clicks, center, zoom, bounds, catastrophe_type, event_name, chi
         # Fetch new data
         new_map_data = get_data(catastrophe_type=catastrophe_type, bounds=global_bounds, resolution=resolution, column_resolution=resolution)
         
-        new_polygons = data_to_polygons(new_map_data)
+        print("new_map_data length:", len(new_map_data))
+        new_polygons = data_to_polygons(new_map_data, catastrophe_type=catastrophe_type)
+        print("new_polygons length:", len(new_polygons))
 
         # print([x.fillColor for x in new_polygons][0:7])
         # Keep event polygon and property markers in children
-        stime = dt.datetime.now()
+        # stime = dt.datetime.now()
         # print(f"CHILDREN: {len(children)}, TIME: {dt.datetime.now()-stime}")
         # print(f"NEW POLYGONS: {len(new_polygons)}, TIME: {dt.datetime.now()-stime}")
         # filtered_children = [x for x in children 
