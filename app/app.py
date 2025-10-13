@@ -63,6 +63,36 @@ global_bounds = None
 response_list = []
 stream_complete = True
 
+icon_style_core = dict(iconUrl=svg_pin_icon("#4CAF50"), iconSize=[40, 40], iconAnchor=[20, 40])
+icon_style_secondary = dict(iconUrl=svg_pin_icon("#FFFF33"), iconSize=[40, 40], iconAnchor=[20, 40])
+icon_style_clicked = dict(iconUrl=svg_pin_icon("#FF0000"), iconSize=[60, 60], iconAnchor=[30, 60])
+card_style_core = {
+    "backgroundColor": "#2C2C2C",
+    "padding": "12px",
+    "marginBottom": "10px",
+    "borderRadius": "6px",
+    "border": "2px solid #4CAF50",
+    "fontFamily": "Helvetica",
+    "fontSize": "12px",
+    "cursor": "pointer",
+    "transition": "all 0.3s ease",
+    "width": "100%",
+    "textAlign": "left"
+}
+card_style_secondary = {
+    **card_style_core,
+    "backgroundColor": "#2C2C2C",
+    "border": "2px solid #FFFF33",
+    "boxShadow": "0 4px 8px rgba(255, 255, 51, 0.3)",
+}
+card_style_clicked = {
+    **card_style_core,
+    "backgroundColor": "#2C2C2C",
+    "border": "2px solid #FF0000",
+    "boxShadow": "0 4px 8px rgba(76, 175, 80, 0.3)",
+    "transform": "translateX(5px)"
+}
+
 # tile_layer_url = "http://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png"
 tile_layer_url = "http://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png"
 
@@ -1189,58 +1219,27 @@ def handle_property_click(card_clicks, marker_clicks, card_ids, marker_ids, prop
     ctx = callback_context
     
     if not ctx.triggered:
-        return no_update
+        return no_update, no_update
     
+    # print("triggered:", ctx.triggered)
+
     triggered_id = ctx.triggered[0]['prop_id']
     triggered_dict = json.loads(triggered_id.split('.')[0])
     property_id = triggered_dict['index']
-    core = [x['core_polygon'] for x in property_data]
-    secondary = [x['secondary_polygon'] for x in property_data]
-    # print(f"type(core), type(secondary): {type(core)}, {type(secondary)}")
-    # custom_icon = dict(
-    #     iconUrl="https://leafletjs.com/examples/custom-icons/leaf-green.png",
-    #     shadowUrl="https://leafletjs.com/examples/custom-icons/leaf-shadow.png",
-    #     iconSize=[38, 95],
-    #     shadowSize=[50, 64],
-    #     iconAnchor=[22, 94],
-    #     shadowAnchor=[4, 62],
-    #     popupAnchor=[-3, -76],
-    # )
-    icon_style_core = dict(iconUrl=svg_pin_icon("#4CAF50"), iconSize=[40, 40], iconAnchor=[20, 40])
-    icon_style_secondary = dict(iconUrl=svg_pin_icon("#FFFF33"), iconSize=[40, 40], iconAnchor=[20, 40])
-    icon_style_clicked = dict(iconUrl=svg_pin_icon("#FF0000"), iconSize=[60, 60], iconAnchor=[30, 60])
-    card_style_core = {
-        "backgroundColor": "#2C2C2C",
-        "padding": "12px",
-        "marginBottom": "10px",
-        "borderRadius": "6px",
-        "border": "2px solid #4CAF50",
-        "fontFamily": "Helvetica",
-        "fontSize": "12px",
-        "cursor": "pointer",
-        "transition": "all 0.3s ease",
-        "width": "100%",
-        "textAlign": "left"
-    }
-    card_style_secondary = {
-        **card_style_core,
-        "backgroundColor": "#2C2C2C",
-        "border": "2px solid #FFFF33",
-        "boxShadow": "0 4px 8px rgba(255, 255, 51, 0.3)",
-    }
-    card_style_clicked = {
-        **card_style_core,
-        "backgroundColor": "#2C2C2C",
-        "border": "2px solid #FF0000",
-        "boxShadow": "0 4px 8px rgba(76, 175, 80, 0.3)",
-        "transform": "translateX(5px)"
-    }
+    triggered_card_ids = [str(x['index']) for x in card_ids]
+    core = [x['core_polygon'] for x in property_data if str(x['property_id']) in triggered_card_ids]
+    secondary = [x['secondary_polygon'] for x in property_data if str(x['property_id']) in triggered_card_ids]
+
+    global icon_style_core, icon_style_secondary, icon_style_clicked
+    global card_style_core, card_style_secondary, card_style_clicked
 
     triggered_dict = json.loads(triggered_id.split('.')[0])
     property_id = triggered_dict['index']
     
     card_styles = []
     marker_icons = []
+
+    # print(len(card_ids), len(triggered_card_ids), len(core), len(secondary))
     for i in range(len(card_ids)):
         if card_ids[i]["index"] == property_id:
             card_style = card_style_clicked
@@ -1292,6 +1291,8 @@ def filter_properties_by_portfolio(selected_portfolio_id, property_data, event_n
             }
         ), html.Div("0 properties"), children
     
+    global card_style_core, card_style_secondary, card_style_clicked
+    global icon_style_core, icon_style_secondary, icon_style_clicked
     # Create property cards with the same styling logic as original
     property_cards = []
     for idx, row in properties_df.iterrows():
@@ -1396,19 +1397,7 @@ def filter_properties_by_portfolio(selected_portfolio_id, property_data, event_n
                     id={"type": "property-card", "index": str(row['property_id'])},
                     n_clicks=0,
                     className="property-card",
-                    style={
-                        "backgroundColor": "#2C2C2C",
-                        "padding": "12px",
-                        "marginBottom": "10px",
-                        "borderRadius": "6px",
-                        "border": "2px solid #4CAF50" if row['core_polygon'] else "2px solid #FFFF33",
-                        "fontFamily": "Helvetica",
-                        "fontSize": "12px",
-                        "cursor": "pointer",
-                        "transition": "all 0.3s ease",
-                        "width": "100%",
-                        "textAlign": "left"
-                    }
+                    style=card_style_core if row['core_polygon'] else card_style_secondary
                 )
             ],
             style={"marginBottom": "10px"}
@@ -1461,11 +1450,7 @@ def filter_properties_by_portfolio(selected_portfolio_id, property_data, event_n
                     ])
                 )
             ],
-            icon=dict(
-                iconUrl=svg_pin_icon("#4CAF50" if row['core_polygon'] else "#FFFF33"),
-                iconSize=[40, 40],
-                iconAnchor=[20, 40]
-            )
+            icon=icon_style_core if row['core_polygon'] else icon_style_secondary
         )
         property_markers.append(marker)
     
@@ -1483,7 +1468,7 @@ def filter_properties_by_portfolio(selected_portfolio_id, property_data, event_n
     prevent_initial_call=True
 )
 def start_text_update(btn_clicks, property_data, event_name):
-    print(f"START TEXT UPDATE: {btn_clicks} clicks")
+    print(f"START TEXT UPDATE") # {btn_clicks} clicks")
 
     if max(btn_clicks) == 0:
         return True, None
@@ -1564,9 +1549,6 @@ def update_response(n_intervals, active_property_id, text_ids):
             response_list = []
             return children_outputs, style_outputs, True
         return children_outputs, style_outputs, True
-
-
-
 
 if __name__ == "__main__":
     app.run(debug=True)
