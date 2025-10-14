@@ -63,6 +63,9 @@ global_bounds = None
 # List to hold streamed responses
 response_list = []
 stream_complete = True
+# List to hold draft message responses
+draft_message_response_list = []
+draft_message_stream_complete = True
 
 icon_style_core = dict(iconUrl=svg_pin_icon("#4CAF50"), iconSize=[40, 40], iconAnchor=[20, 40])
 icon_style_secondary = dict(iconUrl=svg_pin_icon("#FFFF33"), iconSize=[40, 40], iconAnchor=[20, 40])
@@ -134,7 +137,7 @@ def sqlQuery(query: str) -> pd.DataFrame:
             df = pd.DataFrame(rows, columns=columns)
         return df
 
-def fmapi_stream(clicked_property_data, event_name):
+def fmapi_stream_ai_assessment(clicked_property_data, event_name):
     global response_list
     global stream_complete
 
@@ -193,6 +196,66 @@ def fmapi_stream(clicked_property_data, event_name):
 
     print("SETTING STREAM COMPLETE TO TRUE")
     stream_complete = True
+
+def fmapi_stream_draft_message(clicked_property_data, event_name):
+    global draft_message_response_list
+    global draft_message_stream_complete
+
+    print("SETTING DRAFT MESSAGE STREAM COMPLETE TO FALSE")
+    draft_message_response_list = []
+    draft_message_stream_complete = False
+
+    if clicked_property_data and event_name:
+        databricks_host = "https://" + get_databricks_server_hostname()
+        databricks_token = get_databricks_token()
+        model = 'databricks-meta-llama-3-3-70b-instruct'
+        # model = 'databricks-dbrx-instruct'
+        endpoint = f"{databricks_host}/serving-endpoints/{model}/invocations"
+
+        # Define the headers, including the authorization token
+        headers = {
+            "Authorization": f"Bearer {databricks_token}",
+            "Content-Type": "application/json"
+        }
+
+        # Define the payload for the request - DIFFERENT from AI Assessment
+        payload = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": "You are a professional insurance claims adjuster. You are drafting a message to the property owner about their claim."},
+                {"role": "user", "content": f"Please draft a brief, professional message to the property owner regarding the catastrophic event: {event_name} and their property. The message should be empathetic and informative. \n\n Property details: {clicked_property_data}"}
+            ],
+            "max_tokens": 256,
+            "stream": True  # Enable streaming
+        }
+
+        # print(endpoint, payload)
+        # Make the POST request with streaming enabled
+        response = requests.post(endpoint, headers=headers, data=json.dumps(payload), stream=True)
+        print(response)
+        try:
+            for chunk in response.iter_content(chunk_size=None):
+                if chunk:
+                    # print("CHUNK:", chunk)
+                    new_chunks = chunk.decode('utf-8').replace('\n'," ").split('data:')
+                    new_chunks = [x.strip() for x in new_chunks if len(x.strip())>0]
+                    # print("NEW_CHUNKS", new_chunks)
+                    for new_chunk in new_chunks:
+                        # if new_chunk == "[DONE]":
+                        #     break
+                        # print("NEW_CHUNK", new_chunk)
+                        new_chunk_data = json.loads(new_chunk)
+                        # print("NEW_CHUNK_DATA:", new_chunk_data)
+                        if new_chunk_data['choices'][0]['finish_reason'] == 'stop':
+                            break
+                        draft_message_response_list.append(new_chunk_data['choices'][0]['delta']['content'])
+            draft_message_response_list.append(None)
+        except Exception as e:
+            draft_message_response_list.append(None)
+            print(f"An error occurred: {e}")
+
+    print("SETTING DRAFT MESSAGE STREAM COMPLETE TO TRUE")
+    draft_message_stream_complete = True
 
 # Fetch the all h3 data
 def get_data(catastrophe_type=None, resolution=9, bounds=None, column_resolution=None):
@@ -609,6 +672,7 @@ app.layout = html.Div(
         dcc.Store(id='highlighted-property', data=None),
         dcc.Store(id='clicked-property', data=None),
         dcc.Store(id='active-ai-assessment', data=None),
+        dcc.Store(id='active-draft-message', data=None),
         dcc.Store(id='selected-portfolio-id', data=None),
         # Add dropdown selection controls at the top
         html.Div(
@@ -711,6 +775,7 @@ app.layout = html.Div(
                             overlay_style={"visibility":"visible", "filter": "blur(3px)"},
                         ),
                     dcc.Interval(id="interval-component", interval=100, n_intervals=0, disabled=True),  # Check every n milliseconds
+                    dcc.Interval(id="interval-component-draft", interval=100, n_intervals=0, disabled=True),  # Check every n milliseconds for draft messages
                     ],
                     style={"width": "75%", "display": "inline-block", "verticalAlign": "top", "position": "relative"}
                 ),
@@ -1105,10 +1170,47 @@ def update_property_list_and_markers(event_name, hex_children):
                                             "width": "100%",
                                             "textAlign": "center",
                                             "transition": "background-color 0.2s ease",
+                                            "marginBottom": "8px"
                                         }
                                     ),
                                     html.Div(
                                         id={"type": "ai-assessment-text", "index": str(row['property_id'])},
+                                        style={
+                                            "display": "none",
+                                            "marginTop": "10px",
+                                            "marginBottom": "10px",
+                                            "padding": "10px",
+                                            "backgroundColor": "#1A1A1A",
+                                            "borderRadius": "4px",
+                                            "border": "1px solid #5A5A5A",
+                                            "color": "#FFFFFF",
+                                            "fontFamily": "Helvetica",
+                                            "fontSize": "11px",
+                                            "lineHeight": "1.5",
+                                            "whiteSpace": "pre-wrap"
+                                        }
+                                    ),
+                                    html.Button(
+                                        "✉️ Draft Message",
+                                        id={"type": "draft-message-btn", "index": str(row['property_id'])},
+                                        n_clicks=0,
+                                        style={
+                                            "backgroundColor": "#4A4A4A",
+                                            "color": "#FFFFFF",
+                                            "padding": "8px 16px",
+                                            "border": "1px solid #5A5A5A",
+                                            "borderRadius": "4px",
+                                            "fontFamily": "Helvetica",
+                                            "fontSize": "11px",
+                                            "fontWeight": "bold",
+                                            "cursor": "pointer",
+                                            "width": "100%",
+                                            "textAlign": "center",
+                                            "transition": "background-color 0.2s ease",
+                                        }
+                                    ),
+                                    html.Div(
+                                        id={"type": "draft-message-text", "index": str(row['property_id'])},
                                         style={
                                             "display": "none",
                                             "marginTop": "10px",
@@ -1211,7 +1313,7 @@ def update_property_list_and_markers(event_name, hex_children):
                 "textAlign": "center",
                 "padding": "20px"
             }
-        ), html.Div("Error"), [], children, 'all'
+        ), html.Div("Error"), [], [], [], hex_children, 'all'
 
 @app.callback(
     # Output('clicked-property', 'data'),
@@ -1386,10 +1488,47 @@ def filter_properties_by_portfolio(selected_portfolio_id, property_data, event_n
                                         "width": "100%",
                                         "textAlign": "center",
                                         "transition": "background-color 0.2s ease",
+                                        "marginBottom": "8px"
                                     }
                                 ),
                                 html.Div(
                                     id={"type": "ai-assessment-text", "index": str(row['property_id'])},
+                                    style={
+                                        "display": "none",
+                                        "marginTop": "10px",
+                                        "marginBottom": "10px",
+                                        "padding": "10px",
+                                        "backgroundColor": "#1A1A1A",
+                                        "borderRadius": "4px",
+                                        "border": "1px solid #5A5A5A",
+                                        "color": "#FFFFFF",
+                                        "fontFamily": "Helvetica",
+                                        "fontSize": "11px",
+                                        "lineHeight": "1.5",
+                                        "whiteSpace": "pre-wrap"
+                                    }
+                                ),
+                                html.Button(
+                                    "✉️ Draft Message",
+                                    id={"type": "draft-message-btn", "index": str(row['property_id'])},
+                                    n_clicks=0,
+                                    style={
+                                        "backgroundColor": "#4A4A4A",
+                                        "color": "#FFFFFF",
+                                        "padding": "8px 16px",
+                                        "border": "1px solid #5A5A5A",
+                                        "borderRadius": "4px",
+                                        "fontFamily": "Helvetica",
+                                        "fontSize": "11px",
+                                        "fontWeight": "bold",
+                                        "cursor": "pointer",
+                                        "width": "100%",
+                                        "textAlign": "center",
+                                        "transition": "background-color 0.2s ease",
+                                    }
+                                ),
+                                html.Div(
+                                    id={"type": "draft-message-text", "index": str(row['property_id'])},
                                     style={
                                         "display": "none",
                                         "marginTop": "10px",
@@ -1497,7 +1636,7 @@ def start_text_update(btn_clicks, property_data, event_name):
 
     if property_data:
         clicked_property_data = [x for x in property_data if str(x['property_id']) == str(property_id)][0]
-        threading.Thread(target=fmapi_stream, args=(clicked_property_data, event_name,)).start()
+        threading.Thread(target=fmapi_stream_ai_assessment, args=(clicked_property_data, event_name,)).start()
         print("Turning on the interval-component")
         return False, property_id
     else:
@@ -1560,6 +1699,98 @@ def update_response(n_intervals, active_property_id, text_ids):
             children_outputs[active_index] = "".join(final_results)
             style_outputs[active_index] = visible_style
             response_list = []
+            return children_outputs, style_outputs, True
+        return children_outputs, style_outputs, True
+
+# Callback to start draft message text update
+@app.callback(
+    [Output("interval-component-draft", "disabled", allow_duplicate=True),
+     Output('active-draft-message', 'data')],
+    [Input({"type": "draft-message-btn", "index": dash.dependencies.ALL}, "n_clicks")],
+    [State('property-data-store', 'data'),
+     State('event-dropdown', 'value')],
+    prevent_initial_call=True
+)
+def start_draft_message_update(btn_clicks, property_data, event_name):
+    print(f"START DRAFT MESSAGE UPDATE")
+
+    if max(btn_clicks) == 0:
+        return True, None
+
+    ctx = callback_context
+    
+    if not ctx.triggered:
+        return True, None
+    
+    triggered_id = ctx.triggered[0]['prop_id']
+    triggered_dict = json.loads(triggered_id.split('.')[0])
+    property_id = triggered_dict['index']
+
+    if property_data:
+        clicked_property_data = [x for x in property_data if str(x['property_id']) == str(property_id)][0]
+        threading.Thread(target=fmapi_stream_draft_message, args=(clicked_property_data, event_name,)).start()
+        print("Turning on the interval-component-draft")
+        return False, property_id
+    else:
+        return True, None
+
+@app.callback(
+    [Output({"type": "draft-message-text", "index": dash.dependencies.ALL}, "children"),
+     Output({"type": "draft-message-text", "index": dash.dependencies.ALL}, "style"),
+     Output("interval-component-draft", "disabled", allow_duplicate=True)],
+    [Input("interval-component-draft", "n_intervals")],
+    [State('active-draft-message', 'data'),
+     State({"type": "draft-message-text", "index": dash.dependencies.ALL}, "id")],
+    prevent_initial_call=True,
+)
+def update_draft_message_response(n_intervals, active_property_id, text_ids):
+    global draft_message_response_list
+    global draft_message_stream_complete
+
+    if not active_property_id or not text_ids:
+        return [no_update] * len(text_ids), [no_update] * len(text_ids), True
+
+    # Initialize outputs
+    children_outputs = [no_update] * len(text_ids)
+    style_outputs = [no_update] * len(text_ids)
+    
+    # Find the index of the active property
+    active_index = None
+    for i, text_id in enumerate(text_ids):
+        if str(text_id['index']) == str(active_property_id):
+            active_index = i
+            break
+    
+    if active_index is None:
+        return children_outputs, style_outputs, True
+
+    visible_style = {
+        "display": "block",
+        "marginTop": "10px",
+        "padding": "10px",
+        "backgroundColor": "#1A1A1A",
+        "borderRadius": "4px",
+        "border": "1px solid #5A5A5A",
+        "color": "#FFFFFF",
+        "fontFamily": "Helvetica",
+        "fontSize": "11px",
+        "lineHeight": "1.5",
+        "whiteSpace": "pre-wrap"
+    }
+
+    if not draft_message_stream_complete:
+        # Stream is in process
+        current_text = "".join([x for x in draft_message_response_list if x is not None])
+        children_outputs[active_index] = current_text
+        style_outputs[active_index] = visible_style
+        return children_outputs, style_outputs, False
+    else:
+        # print("DRAFT MESSAGE STREAM IS DONE")
+        if len(draft_message_response_list) > 0:
+            final_results = [x for x in draft_message_response_list if x is not None]
+            children_outputs[active_index] = "".join(final_results)
+            style_outputs[active_index] = visible_style
+            draft_message_response_list = []
             return children_outputs, style_outputs, True
         return children_outputs, style_outputs, True
 
