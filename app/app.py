@@ -12,7 +12,7 @@ import dash_bootstrap_components as dbc
 import dash_ag_grid as dag
 from databricks.sdk.core import Config
 import dash_leaflet as dl
-from dash.dependencies import Input, Output
+from dash.dependencies import Input, Output, ALL
 from dash_extensions.javascript import arrow_function
 from dash_extensions.enrich import DashProxy, Input, Output, html
 import flask
@@ -674,6 +674,9 @@ app.layout = html.Div(
         dcc.Store(id='active-ai-assessment', data=None),
         dcc.Store(id='active-draft-message', data=None),
         dcc.Store(id='selected-portfolio-id', data=None),
+        dcc.Store(id='overlay-visible', data=False),
+        dcc.Store(id='genie-conversation-id', data=None),
+        dcc.Store(id='genie-messages', data=[]),
         # Add dropdown selection controls at the top
         html.Div(
             [
@@ -764,7 +767,6 @@ app.layout = html.Div(
                                     style={"width": "100%", "height": "100vh"},
                                     id="map"
                                 ),
-                                # html.Div(id="map-container", children=leaflet_map),
                                 html.Div(id="legend-container", children=legend),
                                 # Hidden div to trigger marker highlighting
                                 html.Div(id="marker-highlight-trigger", style={"display": "none"})
@@ -776,6 +778,8 @@ app.layout = html.Div(
                         ),
                     dcc.Interval(id="interval-component", interval=100, n_intervals=0, disabled=True),  # Check every n milliseconds
                     dcc.Interval(id="interval-component-draft", interval=100, n_intervals=0, disabled=True),  # Check every n milliseconds for draft messages
+                    dcc.Interval(id="dashboard-interval-ai", interval=100, n_intervals=0, disabled=True),  # Dashboard AI Assessment interval
+                    dcc.Interval(id="dashboard-interval-email", interval=100, n_intervals=0, disabled=True),  # Dashboard Draft Email interval
                     ],
                     style={"width": "75%", "display": "inline-block", "verticalAlign": "top", "position": "relative"}
                 ),
@@ -841,6 +845,301 @@ app.layout = html.Div(
             ],
             style={"display": "flex", "width": "100%"}
         ),
+        # Portfolio Analysis Overlay
+        html.Div(
+            id="portfolio-analysis-overlay",
+            children=[
+                html.Div(
+                    [
+                        # Header with close button
+                        html.Div(
+                            [
+                                html.H3("Property Analysis", 
+                                       style={
+                                           "color": "#FFFFFF",
+                                           "fontFamily": "Helvetica",
+                                           "fontWeight": "bold",
+                                           "margin": "0",
+                                           "flex": "1"
+                                       }),
+                                dbc.Button(
+                                    "✕ Close property analysis",
+                                    id="close-portfolio-analysis-btn",
+                                    style={
+                                        "backgroundColor": "#FF4444",
+                                        "color": "#FFFFFF",
+                                        "cursor": "pointer",
+                                        "borderRadius": "4px",
+                                        "fontSize": "14px",
+                                        "fontFamily": "Helvetica",
+                                        "fontWeight": "bold",
+                                        "border": "1px solid #FF4444",
+                                        "padding": "8px 16px"
+                                    }
+                                )
+                            ],
+                            style={
+                                "display": "flex",
+                                "justifyContent": "space-between",
+                                "alignItems": "center",
+                                "marginBottom": "20px",
+                                "paddingBottom": "15px",
+                                "borderBottom": "2px solid #4A4A4A"
+                            }
+                        ),
+                        # Content area with dashboard and chat
+                        html.Div(
+                            [
+                                # Left side - Dashboard iframe
+                                html.Div(
+                                    [
+                                        html.H4("Dashboard View", 
+                                               style={
+                                                   "color": "#FFFFFF",
+                                                   "fontFamily": "Helvetica",
+                                                   "marginBottom": "10px"
+                                               }),
+                                        # Scrollable container for dashboard content
+                                        html.Div(
+                                            [
+                                                # AI Assessment box
+                                                html.Div(
+                                                    [
+                                                        html.Button(
+                                                            "🤖 AI Assessment",
+                                                            id="dashboard-ai-assessment-btn",
+                                                            n_clicks=0,
+                                                            style={
+                                                                "backgroundColor": "#4A4A4A",
+                                                                "color": "#FFFFFF",
+                                                                "padding": "8px 16px",
+                                                                "border": "1px solid #5A5A5A",
+                                                                "borderRadius": "4px",
+                                                                "fontFamily": "Helvetica",
+                                                                "fontSize": "12px",
+                                                                "fontWeight": "bold",
+                                                                "cursor": "pointer",
+                                                                "width": "100%",
+                                                                "transition": "background-color 0.2s ease",
+                                                                "marginBottom": "10px"
+                                                            }
+                                                        ),
+                                                        html.Div(
+                                                            id="dashboard-ai-assessment-text",
+                                                            style={
+                                                                "display": "none",
+                                                                "padding": "10px",
+                                                                "backgroundColor": "#1A1A1A",
+                                                                "borderRadius": "4px",
+                                                                "border": "1px solid #5A5A5A",
+                                                                "color": "#FFFFFF",
+                                                                "fontFamily": "Helvetica",
+                                                                "fontSize": "12px",
+                                                                "lineHeight": "1.5",
+                                                                "whiteSpace": "pre-wrap"
+                                                            }
+                                                        )
+                                                    ],
+                                                    style={
+                                                        "marginBottom": "15px",
+                                                        "padding": "15px",
+                                                        "backgroundColor": "#2C2C2C",
+                                                        "borderRadius": "6px",
+                                                        "border": "1px solid #4A4A4A"
+                                                    }
+                                                ),
+                                                # Draft Email box
+                                                html.Div(
+                                                    [
+                                                        html.Button(
+                                                            "✉️ Draft Email",
+                                                            id="dashboard-draft-email-btn",
+                                                            n_clicks=0,
+                                                            style={
+                                                                "backgroundColor": "#4A4A4A",
+                                                                "color": "#FFFFFF",
+                                                                "padding": "8px 16px",
+                                                                "border": "1px solid #5A5A5A",
+                                                                "borderRadius": "4px",
+                                                                "fontFamily": "Helvetica",
+                                                                "fontSize": "12px",
+                                                                "fontWeight": "bold",
+                                                                "cursor": "pointer",
+                                                                "width": "100%",
+                                                                "transition": "background-color 0.2s ease",
+                                                                "marginBottom": "10px"
+                                                            }
+                                                        ),
+                                                        html.Div(
+                                                            id="dashboard-draft-email-text",
+                                                            style={
+                                                                "display": "none",
+                                                                "padding": "10px",
+                                                                "backgroundColor": "#1A1A1A",
+                                                                "borderRadius": "4px",
+                                                                "border": "1px solid #5A5A5A",
+                                                                "color": "#FFFFFF",
+                                                                "fontFamily": "Helvetica",
+                                                                "fontSize": "12px",
+                                                                "lineHeight": "1.5",
+                                                                "whiteSpace": "pre-wrap"
+                                                            }
+                                                        )
+                                                    ],
+                                                    style={
+                                                        "marginBottom": "15px",
+                                                        "padding": "15px",
+                                                        "backgroundColor": "#2C2C2C",
+                                                        "borderRadius": "6px",
+                                                        "border": "1px solid #4A4A4A"
+                                                    }
+                                                ),
+                                                # Dashboard iframe
+                                                html.Iframe(
+                                                    id="dashboard-iframe",
+                                                    src="",  # Will be set dynamically or via config
+                                                    style={
+                                                        "width": "100%",
+                                                        "height": "400px",
+                                                        "border": "1px solid #4A4A4A",
+                                                        "borderRadius": "4px"
+                                                    }
+                                                )
+                                            ],
+                                            style={
+                                                "maxHeight": "calc(80vh - 100px)",
+                                                "overflowY": "auto",
+                                                "overflowX": "hidden",
+                                                "paddingRight": "10px"
+                                            }
+                                        )
+                                    ],
+                                    style={
+                                        "width": "60%",
+                                        "display": "inline-block",
+                                        "verticalAlign": "top",
+                                        "paddingRight": "15px"
+                                    }
+                                ),
+                                # Right side - Genie chat interface
+                                html.Div(
+                                    [
+                                        html.H4("AI Assistant (Genie)", 
+                                               style={
+                                                   "color": "#FFFFFF",
+                                                   "fontFamily": "Helvetica",
+                                                   "marginBottom": "10px"
+                                               }),
+                                        html.Div(
+                                            id="genie-chat-history",
+                                            children=[
+                                                html.Div(
+                                                    "Ask a question about your portfolio data...",
+                                                    style={
+                                                        "color": "#CCCCCC",
+                                                        "fontFamily": "Helvetica",
+                                                        "fontSize": "12px",
+                                                        "fontStyle": "italic",
+                                                        "padding": "20px",
+                                                        "textAlign": "center"
+                                                    }
+                                                )
+                                            ],
+                                            style={
+                                                "height": "calc(80vh - 220px)",
+                                                "overflowY": "auto",
+                                                "backgroundColor": "#1A1A1A",
+                                                "border": "1px solid #4A4A4A",
+                                                "borderRadius": "4px",
+                                                "padding": "15px",
+                                                "marginBottom": "10px"
+                                            }
+                                        ),
+                                        html.Div(
+                                            [
+                                                dcc.Input(
+                                                    id="genie-input",
+                                                    type="text",
+                                                    placeholder="Type your question here...",
+                                                    style={
+                                                        "width": "calc(100% - 90px)",
+                                                        "padding": "10px",
+                                                        "backgroundColor": "#2C2C2C",
+                                                        "color": "#FFFFFF",
+                                                        "border": "1px solid #4A4A4A",
+                                                        "borderRadius": "4px",
+                                                        "fontFamily": "Helvetica",
+                                                        "fontSize": "12px",
+                                                        "marginRight": "10px"
+                                                    }
+                                                ),
+                                                dbc.Button(
+                                                    "Send",
+                                                    id="genie-send-btn",
+                                                    style={
+                                                        "width": "80px",
+                                                        "backgroundColor": "#4CAF50",
+                                                        "color": "#FFFFFF",
+                                                        "border": "1px solid #4CAF50",
+                                                        "borderRadius": "4px",
+                                                        "fontFamily": "Helvetica",
+                                                        "fontSize": "12px",
+                                                        "fontWeight": "bold",
+                                                        "cursor": "pointer"
+                                                    }
+                                                )
+                                            ],
+                                            style={
+                                                "display": "flex",
+                                                "alignItems": "center"
+                                            }
+                                        ),
+                                        dcc.Loading(
+                                            id="genie-loading",
+                                            type="circle",
+                                            children=html.Div(id="genie-loading-output"),
+                                            color="#4CAF50"
+                                        )
+                                    ],
+                                    style={
+                                        "width": "40%",
+                                        "display": "inline-block",
+                                        "verticalAlign": "top"
+                                    }
+                                )
+                            ],
+                            style={
+                                "display": "flex",
+                                "width": "100%"
+                            }
+                        )
+                    ],
+                    style={
+                        "position": "relative",
+                        "width": "90%",
+                        "maxWidth": "1600px",
+                        "height": "85vh",
+                        "backgroundColor": "#2C2C2C",
+                        "borderRadius": "8px",
+                        "padding": "30px",
+                        "boxShadow": "0 4px 20px rgba(0,0,0,0.5)",
+                        "zIndex": "10001"
+                    }
+                )
+            ],
+            style={
+                "display": "none",  # Hidden by default
+                "position": "fixed",
+                "top": "0",
+                "left": "0",
+                "width": "100%",
+                "height": "100%",
+                "backgroundColor": "rgba(0, 0, 0, 0.8)",
+                "zIndex": "10000",
+                "justifyContent": "center",
+                "alignItems": "center"
+            }
+        )
     ],
     style={"backgroundColor": "#29323C"},
     
@@ -1154,14 +1453,14 @@ def update_property_list_and_markers(event_name, hex_children):
                                         style={"marginBottom": "10px"}
                                     ),
                                     html.Button(
-                                        "🤖 AI Assessment",
-                                        id={"type": "ai-assessment-btn", "index": str(row['property_id'])},
+                                        "📊 Property Analysis",
+                                        id={"type": "property-analysis-btn", "index": str(row['property_id'])},
                                         n_clicks=0,
                                         style={
-                                            "backgroundColor": "#4A4A4A",
+                                            "backgroundColor": "#4CAF50",
                                             "color": "#FFFFFF",
                                             "padding": "8px 16px",
-                                            "border": "1px solid #5A5A5A",
+                                            "border": "1px solid #4CAF50",
                                             "borderRadius": "4px",
                                             "fontFamily": "Helvetica",
                                             "fontSize": "11px",
@@ -1170,59 +1469,6 @@ def update_property_list_and_markers(event_name, hex_children):
                                             "width": "100%",
                                             "textAlign": "center",
                                             "transition": "background-color 0.2s ease",
-                                            "marginBottom": "8px"
-                                        }
-                                    ),
-                                    html.Div(
-                                        id={"type": "ai-assessment-text", "index": str(row['property_id'])},
-                                        style={
-                                            "display": "none",
-                                            "marginTop": "10px",
-                                            "marginBottom": "10px",
-                                            "padding": "10px",
-                                            "backgroundColor": "#1A1A1A",
-                                            "borderRadius": "4px",
-                                            "border": "1px solid #5A5A5A",
-                                            "color": "#FFFFFF",
-                                            "fontFamily": "Helvetica",
-                                            "fontSize": "11px",
-                                            "lineHeight": "1.5",
-                                            "whiteSpace": "pre-wrap"
-                                        }
-                                    ),
-                                    html.Button(
-                                        "✉️ Draft Message",
-                                        id={"type": "draft-message-btn", "index": str(row['property_id'])},
-                                        n_clicks=0,
-                                        style={
-                                            "backgroundColor": "#4A4A4A",
-                                            "color": "#FFFFFF",
-                                            "padding": "8px 16px",
-                                            "border": "1px solid #5A5A5A",
-                                            "borderRadius": "4px",
-                                            "fontFamily": "Helvetica",
-                                            "fontSize": "11px",
-                                            "fontWeight": "bold",
-                                            "cursor": "pointer",
-                                            "width": "100%",
-                                            "textAlign": "center",
-                                            "transition": "background-color 0.2s ease",
-                                        }
-                                    ),
-                                    html.Div(
-                                        id={"type": "draft-message-text", "index": str(row['property_id'])},
-                                        style={
-                                            "display": "none",
-                                            "marginTop": "10px",
-                                            "padding": "10px",
-                                            "backgroundColor": "#1A1A1A",
-                                            "borderRadius": "4px",
-                                            "border": "1px solid #5A5A5A",
-                                            "color": "#FFFFFF",
-                                            "fontFamily": "Helvetica",
-                                            "fontSize": "11px",
-                                            "lineHeight": "1.5",
-                                            "whiteSpace": "pre-wrap"
                                         }
                                     )
                                 ]
@@ -1472,14 +1718,14 @@ def filter_properties_by_portfolio(selected_portfolio_id, property_data, event_n
                                     style={"marginBottom": "10px"}
                                 ),
                                 html.Button(
-                                    "🤖 AI Assessment",
-                                    id={"type": "ai-assessment-btn", "index": str(row['property_id'])},
+                                    "📊 Property Analysis",
+                                    id={"type": "property-analysis-btn", "index": str(row['property_id'])},
                                     n_clicks=0,
                                     style={
-                                        "backgroundColor": "#4A4A4A",
+                                        "backgroundColor": "#4CAF50",
                                         "color": "#FFFFFF",
                                         "padding": "8px 16px",
-                                        "border": "1px solid #5A5A5A",
+                                        "border": "1px solid #4CAF50",
                                         "borderRadius": "4px",
                                         "fontFamily": "Helvetica",
                                         "fontSize": "11px",
@@ -1488,59 +1734,6 @@ def filter_properties_by_portfolio(selected_portfolio_id, property_data, event_n
                                         "width": "100%",
                                         "textAlign": "center",
                                         "transition": "background-color 0.2s ease",
-                                        "marginBottom": "8px"
-                                    }
-                                ),
-                                html.Div(
-                                    id={"type": "ai-assessment-text", "index": str(row['property_id'])},
-                                    style={
-                                        "display": "none",
-                                        "marginTop": "10px",
-                                        "marginBottom": "10px",
-                                        "padding": "10px",
-                                        "backgroundColor": "#1A1A1A",
-                                        "borderRadius": "4px",
-                                        "border": "1px solid #5A5A5A",
-                                        "color": "#FFFFFF",
-                                        "fontFamily": "Helvetica",
-                                        "fontSize": "11px",
-                                        "lineHeight": "1.5",
-                                        "whiteSpace": "pre-wrap"
-                                    }
-                                ),
-                                html.Button(
-                                    "✉️ Draft Message",
-                                    id={"type": "draft-message-btn", "index": str(row['property_id'])},
-                                    n_clicks=0,
-                                    style={
-                                        "backgroundColor": "#4A4A4A",
-                                        "color": "#FFFFFF",
-                                        "padding": "8px 16px",
-                                        "border": "1px solid #5A5A5A",
-                                        "borderRadius": "4px",
-                                        "fontFamily": "Helvetica",
-                                        "fontSize": "11px",
-                                        "fontWeight": "bold",
-                                        "cursor": "pointer",
-                                        "width": "100%",
-                                        "textAlign": "center",
-                                        "transition": "background-color 0.2s ease",
-                                    }
-                                ),
-                                html.Div(
-                                    id={"type": "draft-message-text", "index": str(row['property_id'])},
-                                    style={
-                                        "display": "none",
-                                        "marginTop": "10px",
-                                        "padding": "10px",
-                                        "backgroundColor": "#1A1A1A",
-                                        "borderRadius": "4px",
-                                        "border": "1px solid #5A5A5A",
-                                        "color": "#FFFFFF",
-                                        "fontFamily": "Helvetica",
-                                        "fontSize": "11px",
-                                        "lineHeight": "1.5",
-                                        "whiteSpace": "pre-wrap"
                                     }
                                 )
                             ]
@@ -1793,6 +1986,354 @@ def update_draft_message_response(n_intervals, active_property_id, text_ids):
             draft_message_response_list = []
             return children_outputs, style_outputs, True
         return children_outputs, style_outputs, True
+
+# Callback to show/hide property analysis overlay and store selected property
+@app.callback(
+    [Output('portfolio-analysis-overlay', 'style'),
+     Output('clicked-property', 'data')],
+    [Input({'type': 'property-analysis-btn', 'index': ALL}, 'n_clicks'),
+     Input('close-portfolio-analysis-btn', 'n_clicks')],
+    [State('portfolio-analysis-overlay', 'style')],
+    prevent_initial_call=True
+)
+def toggle_property_analysis_overlay(property_btn_clicks, close_clicks, current_style):
+    """Toggle the property analysis overlay visibility and store selected property"""
+    ctx = callback_context
+    
+    if not ctx.triggered:
+        return no_update, no_update
+    
+    triggered_prop = ctx.triggered[0]['prop_id']
+    
+    # Visible style
+    visible_style = {
+        "display": "flex",
+        "position": "fixed",
+        "top": "0",
+        "left": "0",
+        "width": "100%",
+        "height": "100%",
+        "backgroundColor": "rgba(0, 0, 0, 0.8)",
+        "zIndex": "10000",
+        "justifyContent": "center",
+        "alignItems": "center"
+    }
+    
+    # Hidden style
+    hidden_style = {
+        "display": "none",
+        "position": "fixed",
+        "top": "0",
+        "left": "0",
+        "width": "100%",
+        "height": "100%",
+        "backgroundColor": "rgba(0, 0, 0, 0.8)",
+        "zIndex": "10000",
+        "justifyContent": "center",
+        "alignItems": "center"
+    }
+    
+    # Check if a property analysis button was clicked
+    if 'property-analysis-btn' in triggered_prop:
+        # Make sure a button was actually clicked, not just created
+        if property_btn_clicks and max(property_btn_clicks) > 0:
+            # Extract the property ID from the triggered button
+            import json
+            # Parse the triggered_prop to extract property ID
+            # Format is like: '{"index":"123","type":"property-analysis-btn"}.n_clicks'
+            button_id_str = triggered_prop.split('.')[0]
+            button_id = json.loads(button_id_str)
+            property_id = button_id['index']
+            return visible_style, property_id
+        else:
+            # Buttons were just created, don't open overlay
+            return no_update, no_update
+    elif 'close-portfolio-analysis-btn' in triggered_prop:
+        return hidden_style, no_update
+    
+    return no_update, no_update
+
+# Callback to start dashboard AI Assessment streaming
+@app.callback(
+    Output("dashboard-interval-ai", "disabled"),
+    [Input('dashboard-ai-assessment-btn', 'n_clicks')],
+    [State('clicked-property', 'data'),
+     State('property-data-store', 'data'),
+     State('event-dropdown', 'value')],
+    prevent_initial_call=True
+)
+def start_dashboard_ai_assessment(n_clicks, property_id, property_data, event_name):
+    """Start streaming AI Assessment for dashboard view"""
+    if not n_clicks or not property_id or not property_data:
+        return True
+    
+    # Find the clicked property data
+    clicked_property_data = None
+    for prop in property_data:
+        if str(prop['property_id']) == str(property_id):
+            clicked_property_data = prop
+            break
+    
+    if not clicked_property_data:
+        return True
+    
+    # Start streaming in a thread
+    threading.Thread(target=fmapi_stream_ai_assessment, args=(clicked_property_data, event_name,)).start()
+    print("Starting dashboard AI assessment stream")
+    return False  # Enable interval
+
+# Callback to update dashboard AI Assessment text from stream
+@app.callback(
+    [Output('dashboard-ai-assessment-text', 'children'),
+     Output('dashboard-ai-assessment-text', 'style'),
+     Output("dashboard-interval-ai", "disabled", allow_duplicate=True)],
+    [Input("dashboard-interval-ai", "n_intervals")],
+    prevent_initial_call=True
+)
+def update_dashboard_ai_assessment(n_intervals):
+    """Update dashboard AI Assessment text from stream"""
+    global response_list
+    global stream_complete
+    
+    visible_style = {
+        "display": "block",
+        "padding": "10px",
+        "backgroundColor": "#1A1A1A",
+        "borderRadius": "4px",
+        "border": "1px solid #5A5A5A",
+        "color": "#FFFFFF",
+        "fontFamily": "Helvetica",
+        "fontSize": "12px",
+        "lineHeight": "1.5",
+        "whiteSpace": "pre-wrap"
+    }
+    
+    if not stream_complete:
+        # Stream is in progress
+        current_text = "".join([x for x in response_list if x is not None])
+        return current_text, visible_style, False  # Keep interval enabled
+    else:
+        # Stream is complete
+        final_text = "".join([x for x in response_list if x is not None])
+        return final_text, visible_style, True  # Disable interval
+
+# Callback to start dashboard Draft Email streaming
+@app.callback(
+    Output("dashboard-interval-email", "disabled"),
+    [Input('dashboard-draft-email-btn', 'n_clicks')],
+    [State('clicked-property', 'data'),
+     State('property-data-store', 'data'),
+     State('event-dropdown', 'value')],
+    prevent_initial_call=True
+)
+def start_dashboard_draft_email(n_clicks, property_id, property_data, event_name):
+    """Start streaming Draft Email for dashboard view"""
+    if not n_clicks or not property_id or not property_data:
+        return True
+    
+    # Find the clicked property data
+    clicked_property_data = None
+    for prop in property_data:
+        if str(prop['property_id']) == str(property_id):
+            clicked_property_data = prop
+            break
+    
+    if not clicked_property_data:
+        return True
+    
+    # Start streaming in a thread
+    threading.Thread(target=fmapi_stream_draft_message, args=(clicked_property_data, event_name,)).start()
+    print("Starting dashboard draft email stream")
+    return False  # Enable interval
+
+# Callback to update dashboard Draft Email text from stream
+@app.callback(
+    [Output('dashboard-draft-email-text', 'children'),
+     Output('dashboard-draft-email-text', 'style'),
+     Output("dashboard-interval-email", "disabled", allow_duplicate=True)],
+    [Input("dashboard-interval-email", "n_intervals")],
+    prevent_initial_call=True
+)
+def update_dashboard_draft_email(n_intervals):
+    """Update dashboard Draft Email text from stream"""
+    global draft_message_response_list
+    global draft_message_stream_complete
+    
+    visible_style = {
+        "display": "block",
+        "padding": "10px",
+        "backgroundColor": "#1A1A1A",
+        "borderRadius": "4px",
+        "border": "1px solid #5A5A5A",
+        "color": "#FFFFFF",
+        "fontFamily": "Helvetica",
+        "fontSize": "12px",
+        "lineHeight": "1.5",
+        "whiteSpace": "pre-wrap"
+    }
+    
+    if not draft_message_stream_complete:
+        # Stream is in progress
+        current_text = "".join([x for x in draft_message_response_list if x is not None])
+        return current_text, visible_style, False  # Keep interval enabled
+    else:
+        # Stream is complete
+        final_text = "".join([x for x in draft_message_response_list if x is not None])
+        return final_text, visible_style, True  # Disable interval
+
+# Callback to handle Genie chat interactions
+@app.callback(
+    [Output('genie-chat-history', 'children'),
+     Output('genie-conversation-id', 'data'),
+     Output('genie-messages', 'data'),
+     Output('genie-input', 'value'),
+     Output('genie-loading-output', 'children')],
+    [Input('genie-send-btn', 'n_clicks'),
+     Input('genie-input', 'n_submit')],
+    [State('genie-input', 'value'),
+     State('genie-conversation-id', 'data'),
+     State('genie-messages', 'data'),
+     State('genie-chat-history', 'children')],
+    prevent_initial_call=True
+)
+def handle_genie_chat(send_clicks, n_submit, user_input, conversation_id, messages, current_history):
+    """Handle Genie chat interactions using Databricks Genie API"""
+    from databricks.sdk import WorkspaceClient
+    
+    if not user_input or user_input.strip() == "":
+        return no_update, no_update, no_update, no_update, ""
+    
+    try:
+        w = WorkspaceClient()
+        # TODO: Replace with your actual Genie space ID
+        # You can get this from the Genie UI URL as rooms/SPACE-ID?o=
+        genie_space_id = os.getenv("GENIE_SPACE_ID", "YOUR_GENIE_SPACE_ID")
+        
+        # Initialize chat history if it's the default message
+        if len(current_history) == 1 and isinstance(current_history[0], dict):
+            chat_messages = []
+        else:
+            chat_messages = list(current_history) if current_history else []
+        
+        # Add user message to chat
+        user_message_div = html.Div(
+            [
+                html.Strong("You: ", style={"color": "#4CAF50"}),
+                html.Span(user_input, style={"color": "#FFFFFF"})
+            ],
+            style={
+                "marginBottom": "15px",
+                "padding": "10px",
+                "backgroundColor": "#2C2C2C",
+                "borderRadius": "4px",
+                "borderLeft": "3px solid #4CAF50",
+                "fontFamily": "Helvetica",
+                "fontSize": "12px"
+            }
+        )
+        chat_messages.append(user_message_div)
+        
+        # Process Genie response
+        if conversation_id is None:
+            # Start new conversation
+            response = w.genie.start_conversation_and_wait(genie_space_id, user_input)
+            conversation_id = response.conversation_id
+        else:
+            # Continue existing conversation
+            response = w.genie.create_message_and_wait(
+                genie_space_id, conversation_id, user_input
+            )
+        
+        # Process response attachments
+        response_text = ""
+        for attachment in response.attachments:
+            if attachment.text:
+                response_text += attachment.text.content + "\n"
+            elif attachment.query:
+                response_text += f"{attachment.query.description}\n\n"
+                # Optionally, fetch and display query results
+                if response.query_result and response.query_result.statement_id:
+                    try:
+                        result = w.statement_execution.get_statement(response.query_result.statement_id)
+                        if result.result and result.result.data_array:
+                            # Format data as a simple table
+                            columns = [col.name for col in result.manifest.schema.columns]
+                            response_text += f"Query Results:\nColumns: {', '.join(columns)}\n"
+                            response_text += f"Rows returned: {len(result.result.data_array)}\n"
+                    except Exception as e:
+                        response_text += f"[Error fetching query results: {str(e)}]\n"
+        
+        if not response_text:
+            response_text = "I received your question but couldn't generate a response. Please try rephrasing."
+        
+        # Add Genie response to chat
+        genie_message_div = html.Div(
+            [
+                html.Strong("Genie: ", style={"color": "#2196F3"}),
+                html.Span(response_text, style={"color": "#FFFFFF", "whiteSpace": "pre-wrap"})
+            ],
+            style={
+                "marginBottom": "15px",
+                "padding": "10px",
+                "backgroundColor": "#1A1A1A",
+                "borderRadius": "4px",
+                "borderLeft": "3px solid #2196F3",
+                "fontFamily": "Helvetica",
+                "fontSize": "12px"
+            }
+        )
+        chat_messages.append(genie_message_div)
+        
+        # Update messages store
+        if messages is None:
+            messages = []
+        messages.append({"role": "user", "content": user_input})
+        messages.append({"role": "assistant", "content": response_text})
+        
+        return chat_messages, conversation_id, messages, "", ""
+        
+    except Exception as e:
+        error_message = html.Div(
+            [
+                html.Strong("Error: ", style={"color": "#FF4444"}),
+                html.Span(f"Failed to communicate with Genie: {str(e)}", style={"color": "#FFFFFF"})
+            ],
+            style={
+                "marginBottom": "15px",
+                "padding": "10px",
+                "backgroundColor": "#3A1A1A",
+                "borderRadius": "4px",
+                "borderLeft": "3px solid #FF4444",
+                "fontFamily": "Helvetica",
+                "fontSize": "12px"
+            }
+        )
+        
+        # Keep the user message and add error
+        if len(current_history) == 1 and isinstance(current_history[0], dict):
+            chat_messages = []
+        else:
+            chat_messages = list(current_history) if current_history else []
+        
+        user_message_div = html.Div(
+            [
+                html.Strong("You: ", style={"color": "#4CAF50"}),
+                html.Span(user_input, style={"color": "#FFFFFF"})
+            ],
+            style={
+                "marginBottom": "15px",
+                "padding": "10px",
+                "backgroundColor": "#2C2C2C",
+                "borderRadius": "4px",
+                "borderLeft": "3px solid #4CAF50",
+                "fontFamily": "Helvetica",
+                "fontSize": "12px"
+            }
+        )
+        chat_messages.append(user_message_div)
+        chat_messages.append(error_message)
+        
+        return chat_messages, conversation_id, messages, "", ""
 
 if __name__ == "__main__":
     app.run(debug=True)

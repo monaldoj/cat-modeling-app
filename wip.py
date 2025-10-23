@@ -3,6 +3,7 @@ from databricks import sql
 from databricks.sdk.core import Config
 import pandas as pd
 import numpy as np
+from plotly.graph_objs.layout import updatemenu
 from shapely.geometry import Polygon
 import dash
 from dash import dcc, html, Input, Output, State, callback_context, no_update
@@ -62,6 +63,39 @@ global_bounds = None
 # List to hold streamed responses
 response_list = []
 stream_complete = True
+# List to hold draft message responses
+draft_message_response_list = []
+draft_message_stream_complete = True
+
+icon_style_core = dict(iconUrl=svg_pin_icon("#4CAF50"), iconSize=[40, 40], iconAnchor=[20, 40])
+icon_style_secondary = dict(iconUrl=svg_pin_icon("#FFFF33"), iconSize=[40, 40], iconAnchor=[20, 40])
+icon_style_clicked = dict(iconUrl=svg_pin_icon("#FF0000"), iconSize=[60, 60], iconAnchor=[30, 60])
+card_style_core = {
+    "backgroundColor": "#2C2C2C",
+    "padding": "12px",
+    "marginBottom": "10px",
+    "borderRadius": "6px",
+    "border": "2px solid #4CAF50",
+    "fontFamily": "Helvetica",
+    "fontSize": "12px",
+    "cursor": "pointer",
+    "transition": "all 0.3s ease",
+    "width": "100%",
+    "textAlign": "left"
+}
+card_style_secondary = {
+    **card_style_core,
+    "backgroundColor": "#2C2C2C",
+    "border": "2px solid #FFFF33",
+    "boxShadow": "0 4px 8px rgba(255, 255, 51, 0.3)",
+}
+card_style_clicked = {
+    **card_style_core,
+    "backgroundColor": "#2C2C2C",
+    "border": "2px solid #FF0000",
+    "boxShadow": "0 4px 8px rgba(76, 175, 80, 0.3)",
+    "transform": "translateX(5px)"
+}
 
 # tile_layer_url = "http://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png"
 tile_layer_url = "http://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png"
@@ -103,7 +137,7 @@ def sqlQuery(query: str) -> pd.DataFrame:
             df = pd.DataFrame(rows, columns=columns)
         return df
 
-def fmapi_stream(clicked_property_data, event_name):
+def fmapi_stream_ai_assessment(clicked_property_data, event_name):
     global response_list
     global stream_complete
 
@@ -163,6 +197,66 @@ def fmapi_stream(clicked_property_data, event_name):
     print("SETTING STREAM COMPLETE TO TRUE")
     stream_complete = True
 
+def fmapi_stream_draft_message(clicked_property_data, event_name):
+    global draft_message_response_list
+    global draft_message_stream_complete
+
+    print("SETTING DRAFT MESSAGE STREAM COMPLETE TO FALSE")
+    draft_message_response_list = []
+    draft_message_stream_complete = False
+
+    if clicked_property_data and event_name:
+        databricks_host = "https://" + get_databricks_server_hostname()
+        databricks_token = get_databricks_token()
+        model = 'databricks-meta-llama-3-3-70b-instruct'
+        # model = 'databricks-dbrx-instruct'
+        endpoint = f"{databricks_host}/serving-endpoints/{model}/invocations"
+
+        # Define the headers, including the authorization token
+        headers = {
+            "Authorization": f"Bearer {databricks_token}",
+            "Content-Type": "application/json"
+        }
+
+        # Define the payload for the request - DIFFERENT from AI Assessment
+        payload = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": "You are a professional insurance claims adjuster. You are drafting a message to the property owner about their claim."},
+                {"role": "user", "content": f"Please draft a brief, professional message to the property owner regarding the catastrophic event: {event_name} and their property. The message should be empathetic and informative. \n\n Property details: {clicked_property_data}"}
+            ],
+            "max_tokens": 256,
+            "stream": True  # Enable streaming
+        }
+
+        # print(endpoint, payload)
+        # Make the POST request with streaming enabled
+        response = requests.post(endpoint, headers=headers, data=json.dumps(payload), stream=True)
+        print(response)
+        try:
+            for chunk in response.iter_content(chunk_size=None):
+                if chunk:
+                    # print("CHUNK:", chunk)
+                    new_chunks = chunk.decode('utf-8').replace('\n'," ").split('data:')
+                    new_chunks = [x.strip() for x in new_chunks if len(x.strip())>0]
+                    # print("NEW_CHUNKS", new_chunks)
+                    for new_chunk in new_chunks:
+                        # if new_chunk == "[DONE]":
+                        #     break
+                        # print("NEW_CHUNK", new_chunk)
+                        new_chunk_data = json.loads(new_chunk)
+                        # print("NEW_CHUNK_DATA:", new_chunk_data)
+                        if new_chunk_data['choices'][0]['finish_reason'] == 'stop':
+                            break
+                        draft_message_response_list.append(new_chunk_data['choices'][0]['delta']['content'])
+            draft_message_response_list.append(None)
+        except Exception as e:
+            draft_message_response_list.append(None)
+            print(f"An error occurred: {e}")
+
+    print("SETTING DRAFT MESSAGE STREAM COMPLETE TO TRUE")
+    draft_message_stream_complete = True
+
 # Fetch the all h3 data
 def get_data(catastrophe_type=None, resolution=9, bounds=None, column_resolution=None):
     stime = dt.datetime.now()
@@ -194,7 +288,7 @@ def get_data(catastrophe_type=None, resolution=9, bounds=None, column_resolution
                     GROUP BY h3_cell_id
                     HAVING value > 0
                     )
-                    SELECT h3_boundaryasgeojson(h3_cell_id) as hex_boundary,
+                    SELECT h3_cell_id, h3_boundaryasgeojson(h3_cell_id) as hex_boundary,
                             value
                     FROM cell_agg
                     -- ORDER BY value DESC
@@ -517,7 +611,8 @@ def polygon_clip_to_bounds(polygon_coords, bounds):
 deciles = create_linear_color_scale(np.linspace(0.0, 1.0, 11))
 legend = create_legend(deciles)
 
-def data_to_polygons(map_data):
+def data_to_polygons(map_data, catastrophe_type=None):
+    print("map_data:", map_data)
     hex_centers_lats = []
     hex_centers_lngs = []
     hex_boundaries_polygons = []
@@ -530,6 +625,7 @@ def data_to_polygons(map_data):
     stime = dt.datetime.now()
     print(f"DATA TO POLYGONS: {len(map_data)} rows, TIME: {stime}")
     for i in range(len(map_data)):
+        hex_cell_id = map_data.iloc[i]['h3_cell_id']
         hex_boundaries_polygon = [[coord[1], coord[0]] for coord in json.loads(map_data.iloc[i]['hex_boundary'])['coordinates'][0]]
         hex_boundaries_polygons.append(hex_boundaries_polygon)
         
@@ -545,8 +641,13 @@ def data_to_polygons(map_data):
 
         style = style_function(map_data.iloc[i]['value'].item(), deciles)
 
+        # Create a deterministic ID that includes catastrophe type
+        # This ensures polygons are recreated when colors change due to different data
+        # while maintaining performance by reusing polygons with same ID when data is identical
+        hex_id = f"{hex_cell_id}-{catastrophe_type}" if catastrophe_type else str(hex_cell_id)
+
         dlPolygons.append(dl.Polygon(
-            id={"type": "hex-polygon", "index": "hex-polygon-" + str(i)},
+            id={"type": "hex-polygon", "index": hex_id},
             positions=hex_boundaries_polygon,
             fillColor=style['fillColor'],
             color=style['color'],
@@ -555,7 +656,7 @@ def data_to_polygons(map_data):
             fillOpacity=style['fillOpacity']
             )
         )
-    print([x.fillColor for x in dlPolygons][0:7])
+    # print([x.fillColor for x in dlPolygons][0:7])
     # print(f"DATA TO POLYGONS TOOK: {dt.datetime.now() - stime}")
     return dlPolygons
 
@@ -571,6 +672,8 @@ app.layout = html.Div(
         dcc.Store(id='highlighted-property', data=None),
         dcc.Store(id='clicked-property', data=None),
         dcc.Store(id='active-ai-assessment', data=None),
+        dcc.Store(id='active-draft-message', data=None),
+        dcc.Store(id='selected-portfolio-id', data=None),
         # Add dropdown selection controls at the top
         html.Div(
             [
@@ -648,7 +751,9 @@ app.layout = html.Div(
                                 dl.Map(
                                     [
                                         dl.TileLayer(url=tile_layer_url, attribution='© Mapbox © OpenStreetMap'),
-                                        dl.LayerGroup(id="map-polygons", children=[]) #dl.Polygon(color='#39FF14', positions=[[25.2, -81.6], [25.2, -79.8], [26.6, -79.8], [26.6, -81.6]])])
+                                        dl.LayerGroup(id="map-hex-polygons", children=[]),
+                                        dl.LayerGroup(id="map-event-polygons", children=[]),
+                                        dl.LayerGroup(id="map-property-markers", children=[]) #dl.Polygon(color='#39FF14', positions=[[25.2, -81.6], [25.2, -79.8], [26.6, -79.8], [26.6, -81.6]])])
                                         # dl.Polygon(color='#39FF14', positions=[[25.2, -81.6], [25.2, -79.8], [26.6, -79.8], [26.6, -81.6]])
                                     ],
                                     center=[39.8283, -98.5795],
@@ -670,6 +775,7 @@ app.layout = html.Div(
                             overlay_style={"visibility":"visible", "filter": "blur(3px)"},
                         ),
                     dcc.Interval(id="interval-component", interval=100, n_intervals=0, disabled=True),  # Check every n milliseconds
+                    dcc.Interval(id="interval-component-draft", interval=100, n_intervals=0, disabled=True),  # Check every n milliseconds for draft messages
                     ],
                     style={"width": "75%", "display": "inline-block", "verticalAlign": "top", "position": "relative"}
                 ),
@@ -683,9 +789,22 @@ app.layout = html.Div(
                                            "color": "#FFFFFF", 
                                            "fontFamily": "Helvetica", 
                                            "fontWeight": "bold",
-                                           "marginBottom": "15px",
+                                           "marginBottom": "10px",
                                            "textAlign": "center"
                                        }),
+                                dcc.Dropdown(
+                                    id="portfolio-dropdown",
+                                    placeholder="All Portfolios",
+                                    value='all',
+                                    style={
+                                        "width": "100%",
+                                        "backgroundColor": "#FFFFFF",
+                                        "fontFamily": "Helvetica",
+                                        "fontSize": "12px",
+                                        "marginBottom": "15px"
+                                    },
+                                    clearable=True
+                                ),
                                 html.Div(id="property-agg",
                                         style={
                                             "color": "#CCCCCC",
@@ -729,19 +848,19 @@ app.layout = html.Div(
 
 # Add callback for refresh button and initial load
 @app.callback(
-    [Output('map-polygons', 'children', allow_duplicate=True),
+    [Output('map-hex-polygons', 'children', allow_duplicate=True),
      Output('refresh-button', 'style')],
     Input('refresh-button', 'n_clicks'),
     [State("map", "center"),
      State("map", "zoom"),
      State("map", "bounds"),
      State("catastrophe-dropdown", "value"),
-     State("event-dropdown", "value"),
-     State('map-polygons', 'children'),
+    #  State("event-dropdown", "value"),
+    #  State('map-hex-polygons', 'children'),
      ],
      prevent_initial_call=True
 )
-def update_map(n_clicks, center, zoom, bounds, catastrophe_type, event_name, children):
+def update_map(n_clicks, center, zoom, bounds, catastrophe_type): #, event_name, children):
     # Define button styles
     active_style = {
         "backgroundColor": "#3A3A3A",
@@ -782,23 +901,25 @@ def update_map(n_clicks, center, zoom, bounds, catastrophe_type, event_name, chi
         # Fetch new data
         new_map_data = get_data(catastrophe_type=catastrophe_type, bounds=global_bounds, resolution=resolution, column_resolution=resolution)
         
-        new_polygons = data_to_polygons(new_map_data)
+        print("new_map_data length:", len(new_map_data))
+        new_polygons = data_to_polygons(new_map_data, catastrophe_type=catastrophe_type)
+        print("new_polygons length:", len(new_polygons))
 
-        print([x.fillColor for x in new_polygons][0:7])
+        # print([x.fillColor for x in new_polygons][0:7])
         # Keep event polygon and property markers in children
-        stime = dt.datetime.now()
+        # stime = dt.datetime.now()
         # print(f"CHILDREN: {len(children)}, TIME: {dt.datetime.now()-stime}")
         # print(f"NEW POLYGONS: {len(new_polygons)}, TIME: {dt.datetime.now()-stime}")
-        filtered_children = [x for x in children 
-                           if 'id' in x.get('props', {}) 
-                           and (isinstance(x['props']['id'], dict) 
-                                and x['props']['id'].get('type') in ['event-polygon', 'property-marker'])]
-        # print(f"FILTERED CHILDREN: {len(filtered_children)}, TIME: {dt.datetime.now()-stime}")
-        polygons = new_polygons + filtered_children
+        # filtered_children = [x for x in children 
+        #                    if 'id' in x.get('props', {}) 
+        #                    and (isinstance(x['props']['id'], dict) 
+        #                         and x['props']['id'].get('type') in ['event-polygon', 'property-marker'])]
+        # # print(f"FILTERED CHILDREN: {len(filtered_children)}, TIME: {dt.datetime.now()-stime}")
+        # polygons = new_polygons + filtered_children
         # print(f"POLYGONS: {len(polygons)}, TIME: {dt.datetime.now()-stime}")
-        print([x.fillColor for x in polygons][0:7])
+        # print([x.fillColor for x in polygons][0:7])
         print("Map refreshed successfully!")
-        return polygons, active_style
+        return new_polygons, active_style
 
 
 # Callback to immediately update button style when clicked (before map update)
@@ -865,18 +986,41 @@ def populate_events(pathname):
         print("Returning empty list")
         return [], "Select an event...", False, None
 
+# Callback to populate portfolio dropdown when properties are loaded
+@app.callback(
+    Output('portfolio-dropdown', 'options'),
+    Input('property-data-store', 'data'),
+    prevent_initial_call=True
+)
+def populate_portfolio_dropdown(property_data):
+    """Populate the portfolio dropdown with unique portfolio IDs from loaded properties"""
+    if not property_data:
+        return []
+    
+    # Extract unique portfolio IDs
+    portfolio_ids = sorted(list(set([prop['portfolio_id'] for prop in property_data])))
+    
+    # Create dropdown options with "All Portfolios" as the first option
+    options = [{'label': 'All Portfolios', 'value': 'all'}]
+    options.extend([{'label': f'Portfolio {pid}', 'value': pid} for pid in portfolio_ids])
+    
+    return options
+
 # Callback to update both property list and markers when event is selected
 @app.callback(
     [Output('map', 'viewport'),
      Output('property-list', 'children'),
      Output('property-agg', 'children'),
      Output('property-data-store', 'data'),
-     Output('map-polygons', 'children')],
+     Output('map-event-polygons', 'children'),
+     Output('map-property-markers', 'children'),
+     Output('map-hex-polygons', 'children'),
+     Output('portfolio-dropdown', 'value')],
     [Input('event-dropdown', 'value')],
-    [State('map-polygons', 'children')],
+    [State('map-hex-polygons', 'children')],
     prevent_initial_call=True
 )
-def update_property_list_and_markers(event_name, children):
+def update_property_list_and_markers(event_name, hex_children):
     """Update the property list and map markers when an event is selected"""
     
     stime = dt.datetime.now()
@@ -895,7 +1039,7 @@ def update_property_list_and_markers(event_name, children):
                 "textAlign": "center",
                 "padding": "20px"
             }
-        ), "", [], children
+        ), "", [], [], [], hex_children, 'all'
     
     try:
         event_wkt = get_event_details(event_name)
@@ -913,19 +1057,18 @@ def update_property_list_and_markers(event_name, children):
         
         # Filter updated_children to only include elements where x['props']['positions'] coordinates overlap with the viewport coordinates using shapely
         viewport_filter = wkt.loads(buffer_wkt)
-        filtered_children = []
-        for child in children:
-            if child['props']['id']['type'] == 'hex-polygon':
-                child_polygon = Polygon([(x[1], x[0]) for x in child['props']['positions']])
-                if child_polygon.is_valid and child_polygon.intersects(viewport_filter):
-                    filtered_children.append(child)
+        updated_hex_children = []
+        for child in hex_children:
+            child_polygon = Polygon([(x[1], x[0]) for x in child['props']['positions']])
+            if child_polygon.is_valid and child_polygon.intersects(viewport_filter):
+                updated_hex_children.append(child)
 
         print(f"Time taken to filter children: {dt.datetime.now() - stime}")
-        updated_children = filtered_children
         
         # updated_children = [x for x in children if x['props']['id']['type'] != 'event-polygon']
-        updated_children.append(event_polygon_element)
-        updated_children.append(buffer_polygon_element)
+        event_polygons_children = []
+        event_polygons_children.append(event_polygon_element)
+        event_polygons_children.append(buffer_polygon_element)
         print(f"Time taken to create event polygon: {dt.datetime.now() - stime}")
 
         # Fetch properties affected by the event
@@ -942,7 +1085,7 @@ def update_property_list_and_markers(event_name, children):
                     "textAlign": "center",
                     "padding": "20px"
                 }
-            ), html.Div("0 properties"), [], updated_children
+            ), html.Div("0 properties"), [], event_polygons_children, [], updated_hex_children, 'all'
         
         # Store property data for markers
         property_data = properties_df.to_dict('records')
@@ -1027,10 +1170,47 @@ def update_property_list_and_markers(event_name, children):
                                             "width": "100%",
                                             "textAlign": "center",
                                             "transition": "background-color 0.2s ease",
+                                            "marginBottom": "8px"
                                         }
                                     ),
                                     html.Div(
                                         id={"type": "ai-assessment-text", "index": str(row['property_id'])},
+                                        style={
+                                            "display": "none",
+                                            "marginTop": "10px",
+                                            "marginBottom": "10px",
+                                            "padding": "10px",
+                                            "backgroundColor": "#1A1A1A",
+                                            "borderRadius": "4px",
+                                            "border": "1px solid #5A5A5A",
+                                            "color": "#FFFFFF",
+                                            "fontFamily": "Helvetica",
+                                            "fontSize": "11px",
+                                            "lineHeight": "1.5",
+                                            "whiteSpace": "pre-wrap"
+                                        }
+                                    ),
+                                    html.Button(
+                                        "✉️ Draft Message",
+                                        id={"type": "draft-message-btn", "index": str(row['property_id'])},
+                                        n_clicks=0,
+                                        style={
+                                            "backgroundColor": "#4A4A4A",
+                                            "color": "#FFFFFF",
+                                            "padding": "8px 16px",
+                                            "border": "1px solid #5A5A5A",
+                                            "borderRadius": "4px",
+                                            "fontFamily": "Helvetica",
+                                            "fontSize": "11px",
+                                            "fontWeight": "bold",
+                                            "cursor": "pointer",
+                                            "width": "100%",
+                                            "textAlign": "center",
+                                            "transition": "background-color 0.2s ease",
+                                        }
+                                    ),
+                                    html.Div(
+                                        id={"type": "draft-message-text", "index": str(row['property_id'])},
                                         style={
                                             "display": "none",
                                             "marginTop": "10px",
@@ -1117,10 +1297,10 @@ def update_property_list_and_markers(event_name, children):
         
         # Combine existing elements with event polygon and new markers
         # updated_children = filtered_children + [event_polygon_element] + property_markers
-        updated_children = updated_children + property_markers
+        # updated_children = updated_children + property_markers
         
-        print(f'Time taken to combine elements, {len(updated_children)} children: {dt.datetime.now() - stime}')
-        return viewport, html.Div(property_cards), agg_div, property_data, updated_children
+        print(f'Time taken to combine elements, {len(updated_hex_children)} children: {dt.datetime.now() - stime}')
+        return viewport, html.Div(property_cards), agg_div, property_data, event_polygons_children, property_markers, updated_hex_children, 'all'
             
     except Exception as e:
         print(f"Error fetching properties: {e}")
@@ -1133,7 +1313,7 @@ def update_property_list_and_markers(event_name, children):
                 "textAlign": "center",
                 "padding": "20px"
             }
-        ), html.Div("Error"), [], children
+        ), html.Div("Error"), [], [], [], hex_children, 'all'
 
 @app.callback(
     # Output('clicked-property', 'data'),
@@ -1154,58 +1334,27 @@ def handle_property_click(card_clicks, marker_clicks, card_ids, marker_ids, prop
     ctx = callback_context
     
     if not ctx.triggered:
-        return no_update
+        return no_update, no_update
     
+    # print("triggered:", ctx.triggered)
+
     triggered_id = ctx.triggered[0]['prop_id']
     triggered_dict = json.loads(triggered_id.split('.')[0])
     property_id = triggered_dict['index']
-    core = [x['core_polygon'] for x in property_data]
-    secondary = [x['secondary_polygon'] for x in property_data]
-    # print(f"type(core), type(secondary): {type(core)}, {type(secondary)}")
-    # custom_icon = dict(
-    #     iconUrl="https://leafletjs.com/examples/custom-icons/leaf-green.png",
-    #     shadowUrl="https://leafletjs.com/examples/custom-icons/leaf-shadow.png",
-    #     iconSize=[38, 95],
-    #     shadowSize=[50, 64],
-    #     iconAnchor=[22, 94],
-    #     shadowAnchor=[4, 62],
-    #     popupAnchor=[-3, -76],
-    # )
-    icon_style_core = dict(iconUrl=svg_pin_icon("#4CAF50"), iconSize=[40, 40], iconAnchor=[20, 40])
-    icon_style_secondary = dict(iconUrl=svg_pin_icon("#FFFF33"), iconSize=[40, 40], iconAnchor=[20, 40])
-    icon_style_clicked = dict(iconUrl=svg_pin_icon("#FF0000"), iconSize=[60, 60], iconAnchor=[30, 60])
-    card_style_core = {
-        "backgroundColor": "#2C2C2C",
-        "padding": "12px",
-        "marginBottom": "10px",
-        "borderRadius": "6px",
-        "border": "2px solid #4CAF50",
-        "fontFamily": "Helvetica",
-        "fontSize": "12px",
-        "cursor": "pointer",
-        "transition": "all 0.3s ease",
-        "width": "100%",
-        "textAlign": "left"
-    }
-    card_style_secondary = {
-        **card_style_core,
-        "backgroundColor": "#2C2C2C",
-        "border": "2px solid #FFFF33",
-        "boxShadow": "0 4px 8px rgba(255, 255, 51, 0.3)",
-    }
-    card_style_clicked = {
-        **card_style_core,
-        "backgroundColor": "#2C2C2C",
-        "border": "2px solid #FF0000",
-        "boxShadow": "0 4px 8px rgba(76, 175, 80, 0.3)",
-        "transform": "translateX(5px)"
-    }
+    triggered_card_ids = [str(x['index']) for x in card_ids]
+    core = [x['core_polygon'] for x in property_data if str(x['property_id']) in triggered_card_ids]
+    secondary = [x['secondary_polygon'] for x in property_data if str(x['property_id']) in triggered_card_ids]
+
+    global icon_style_core, icon_style_secondary, icon_style_clicked
+    global card_style_core, card_style_secondary, card_style_clicked
 
     triggered_dict = json.loads(triggered_id.split('.')[0])
     property_id = triggered_dict['index']
     
     card_styles = []
     marker_icons = []
+
+    # print(len(card_ids), len(triggered_card_ids), len(core), len(secondary))
     for i in range(len(card_ids)):
         if card_ids[i]["index"] == property_id:
             card_style = card_style_clicked
@@ -1220,6 +1369,246 @@ def handle_property_click(card_clicks, marker_clicks, card_ids, marker_ids, prop
         marker_icons.append(marker_icon)
 
     return card_styles, marker_icons
+
+# Callback to filter property cards and markers by portfolio ID
+@app.callback(
+    [Output('property-list', 'children', allow_duplicate=True),
+     Output('property-agg', 'children', allow_duplicate=True),
+     Output('map-property-markers', 'children', allow_duplicate=True)],
+    [Input('portfolio-dropdown', 'value')],
+    [State('property-data-store', 'data'),
+     State('event-dropdown', 'value'),
+     State('map-property-markers', 'children')],
+    prevent_initial_call=True
+)
+def filter_properties_by_portfolio(selected_portfolio_id, property_data, event_name, children):
+    """Filter property cards and markers based on selected portfolio ID"""
+    
+    if not property_data:
+        return no_update, no_update, no_update
+    
+    # If no portfolio is selected (cleared) or "all" is selected, show all properties
+    if selected_portfolio_id is None or selected_portfolio_id == 'all':
+        properties_df = pd.DataFrame(property_data)
+    else:
+        # Filter properties by portfolio_id
+        properties_df = pd.DataFrame([prop for prop in property_data if prop['portfolio_id'] == selected_portfolio_id])
+    
+    if properties_df.empty:
+        return html.Div(
+            "No properties found for this portfolio",
+            style={
+                "color": "#CCCCCC",
+                "fontFamily": "Helvetica",
+                "fontSize": "14px",
+                "textAlign": "center",
+                "padding": "20px"
+            }
+        ), html.Div("0 properties"), children
+    
+    global card_style_core, card_style_secondary, card_style_clicked
+    global icon_style_core, icon_style_secondary, icon_style_clicked
+    # Create property cards with the same styling logic as original
+    property_cards = []
+    for idx, row in properties_df.iterrows():
+        card = html.Div(
+            [
+                html.Button(
+                    [
+                        html.Div(
+                            [
+                                html.Div(
+                                    [
+                                        html.Strong("Portfolio ID: ", style={"color": "#FFFFFF"}),
+                                        html.Span(str(row['portfolio_id']), style={"color": "#CCCCCC"})
+                                    ],
+                                    style={"marginBottom": "5px"}
+                                ),
+                                html.Div(
+                                    [
+                                        html.Strong("Property ID: ", style={"color": "#FFFFFF"}),
+                                        html.Span(str(row['property_id']), style={"color": "#CCCCCC"})
+                                    ],
+                                    style={"marginBottom": "5px"}
+                                ),
+                                html.Div(
+                                    [
+                                        html.Strong("Property Value: ", style={"color": "#FFFFFF"}),
+                                        html.Span(f"${row['property_value']:,.2f}" if pd.notna(row['property_value']) else "N/A", 
+                                                 style={"color": "#4CAF50", "fontWeight": "bold"})
+                                    ],
+                                    style={"marginBottom": "5px"}
+                                ),
+                                html.Div(
+                                    [
+                                        html.Strong("Name: ", style={"color": "#FFFFFF"}),
+                                        html.Span(str(row['name']) if pd.notna(row['name']) else "N/A", 
+                                                 style={"color": "#CCCCCC"})
+                                    ],
+                                    style={"marginBottom": "5px"}
+                                ),
+                                html.Div(
+                                    [
+                                        html.Strong("Address: ", style={"color": "#FFFFFF"}),
+                                        html.Span(
+                                            f"{row['housenumber'] if pd.notna(row['housenumber']) else ''} "
+                                            f"{row['street'] if pd.notna(row['street']) else ''} "
+                                            f"{row['city'] if pd.notna(row['city']) else ''}, "
+                                            f"{row['state'] if pd.notna(row['state']) else ''} "
+                                            f"{row['postcode'] if pd.notna(row['postcode']) else ''}",
+                                            style={"color": "#CCCCCC"}
+                                        )
+                                    ],
+                                    style={"marginBottom": "5px"}
+                                ),
+                                html.Div(
+                                    [
+                                        html.Strong("Coordinates: ", style={"color": "#FFFFFF"}),
+                                        html.Span(
+                                            f"({row['lat']:.4f}, {row['lon']:.4f})",
+                                            style={"color": "#CCCCCC", "fontSize": "11px"}
+                                        )
+                                    ],
+                                    style={"marginBottom": "10px"}
+                                ),
+                                html.Button(
+                                    "🤖 AI Assessment",
+                                    id={"type": "ai-assessment-btn", "index": str(row['property_id'])},
+                                    n_clicks=0,
+                                    style={
+                                        "backgroundColor": "#4A4A4A",
+                                        "color": "#FFFFFF",
+                                        "padding": "8px 16px",
+                                        "border": "1px solid #5A5A5A",
+                                        "borderRadius": "4px",
+                                        "fontFamily": "Helvetica",
+                                        "fontSize": "11px",
+                                        "fontWeight": "bold",
+                                        "cursor": "pointer",
+                                        "width": "100%",
+                                        "textAlign": "center",
+                                        "transition": "background-color 0.2s ease",
+                                        "marginBottom": "8px"
+                                    }
+                                ),
+                                html.Div(
+                                    id={"type": "ai-assessment-text", "index": str(row['property_id'])},
+                                    style={
+                                        "display": "none",
+                                        "marginTop": "10px",
+                                        "marginBottom": "10px",
+                                        "padding": "10px",
+                                        "backgroundColor": "#1A1A1A",
+                                        "borderRadius": "4px",
+                                        "border": "1px solid #5A5A5A",
+                                        "color": "#FFFFFF",
+                                        "fontFamily": "Helvetica",
+                                        "fontSize": "11px",
+                                        "lineHeight": "1.5",
+                                        "whiteSpace": "pre-wrap"
+                                    }
+                                ),
+                                html.Button(
+                                    "✉️ Draft Message",
+                                    id={"type": "draft-message-btn", "index": str(row['property_id'])},
+                                    n_clicks=0,
+                                    style={
+                                        "backgroundColor": "#4A4A4A",
+                                        "color": "#FFFFFF",
+                                        "padding": "8px 16px",
+                                        "border": "1px solid #5A5A5A",
+                                        "borderRadius": "4px",
+                                        "fontFamily": "Helvetica",
+                                        "fontSize": "11px",
+                                        "fontWeight": "bold",
+                                        "cursor": "pointer",
+                                        "width": "100%",
+                                        "textAlign": "center",
+                                        "transition": "background-color 0.2s ease",
+                                    }
+                                ),
+                                html.Div(
+                                    id={"type": "draft-message-text", "index": str(row['property_id'])},
+                                    style={
+                                        "display": "none",
+                                        "marginTop": "10px",
+                                        "padding": "10px",
+                                        "backgroundColor": "#1A1A1A",
+                                        "borderRadius": "4px",
+                                        "border": "1px solid #5A5A5A",
+                                        "color": "#FFFFFF",
+                                        "fontFamily": "Helvetica",
+                                        "fontSize": "11px",
+                                        "lineHeight": "1.5",
+                                        "whiteSpace": "pre-wrap"
+                                    }
+                                )
+                            ]
+                        )
+                    ],
+                    id={"type": "property-card", "index": str(row['property_id'])},
+                    n_clicks=0,
+                    className="property-card",
+                    style=card_style_core if row['core_polygon'] else card_style_secondary
+                )
+            ],
+            style={"marginBottom": "10px"}
+        )
+        property_cards.append(card)
+    
+    # Update aggregate statistics
+    total_count = len(properties_df)
+    total_value = properties_df['property_value'].sum()
+    total_payout = properties_df['property_payout'].sum()
+    
+    agg_div = html.Div([
+        html.Div([
+            html.Span(f"{total_count:,} ", style={"fontWeight": "bold", "color": "#FFFFFF"}),
+            html.Span(f"propert{'ies' if total_count != 1 else 'y'} affected", style={"color": "#CCCCCC"})
+        ], style={"marginBottom": "5px"}),
+        html.Div([
+            html.Span("Total affected property value: ", style={"color": "#CCCCCC"}),
+            html.Span(f"${total_value:,.2f}", style={"fontWeight": "bold", "color": "#4CAF50"})
+        ], style={"marginBottom": "5px"}),
+        html.Div([
+            html.Span("Total proposed payout: ", style={"color": "#CCCCCC"}),
+            html.Span(f"${total_payout:,.2f}", style={"fontWeight": "bold", "color": "#4CAF50"})
+        ])
+    ])
+    
+    # Filter markers to only show properties in the selected portfolio
+    # Remove old property markers and add new filtered ones
+    # filtered_children = [x for x in children 
+    #                     if 'id' in x.get('props', {}) 
+    #                     and (isinstance(x['props']['id'], dict) 
+    #                          and x['props']['id'].get('type') != 'property-marker')]
+    
+    # Create new property markers for filtered properties
+    property_markers = []
+    for idx, row in properties_df.iterrows():
+        marker = dl.Marker(
+            id={"type": "property-marker", "index": str(row['property_id'])},
+            position=[row['lat'], row['lon']],
+            n_clicks=0,
+            children=[
+                dl.Tooltip(
+                    children=html.Div([
+                        html.Strong(f"Portfolio ID: {row['portfolio_id']}", style={"display": "block", "marginBottom": "5px"}),
+                        html.Strong(f"Property ID: {row['property_id']}", style={"display": "block", "marginBottom": "5px"}),
+                        html.Span(f"Value: ${row['property_value']:,.2f}" if pd.notna(row['property_value']) else "Value: N/A", 
+                                 style={"display": "block", "marginBottom": "3px"}),
+                        html.Span(str(row['name']) if pd.notna(row['name']) else "", 
+                                 style={"display": "block", "fontSize": "11px"})
+                    ])
+                )
+            ],
+            icon=icon_style_core if row['core_polygon'] else icon_style_secondary
+        )
+        property_markers.append(marker)
+    
+    # updated_children = filtered_children + property_markers
+    
+    return html.Div(property_cards), agg_div, property_markers
     
 # # Callback to start iterative text update
 @app.callback(
@@ -1231,7 +1620,7 @@ def handle_property_click(card_clicks, marker_clicks, card_ids, marker_ids, prop
     prevent_initial_call=True
 )
 def start_text_update(btn_clicks, property_data, event_name):
-    print(f"START TEXT UPDATE: {btn_clicks} clicks")
+    print(f"START TEXT UPDATE") # {btn_clicks} clicks")
 
     if max(btn_clicks) == 0:
         return True, None
@@ -1247,7 +1636,7 @@ def start_text_update(btn_clicks, property_data, event_name):
 
     if property_data:
         clicked_property_data = [x for x in property_data if str(x['property_id']) == str(property_id)][0]
-        threading.Thread(target=fmapi_stream, args=(clicked_property_data, event_name,)).start()
+        threading.Thread(target=fmapi_stream_ai_assessment, args=(clicked_property_data, event_name,)).start()
         print("Turning on the interval-component")
         return False, property_id
     else:
@@ -1313,8 +1702,97 @@ def update_response(n_intervals, active_property_id, text_ids):
             return children_outputs, style_outputs, True
         return children_outputs, style_outputs, True
 
+# Callback to start draft message text update
+@app.callback(
+    [Output("interval-component-draft", "disabled", allow_duplicate=True),
+     Output('active-draft-message', 'data')],
+    [Input({"type": "draft-message-btn", "index": dash.dependencies.ALL}, "n_clicks")],
+    [State('property-data-store', 'data'),
+     State('event-dropdown', 'value')],
+    prevent_initial_call=True
+)
+def start_draft_message_update(btn_clicks, property_data, event_name):
+    print(f"START DRAFT MESSAGE UPDATE")
 
+    if max(btn_clicks) == 0:
+        return True, None
 
+    ctx = callback_context
+    
+    if not ctx.triggered:
+        return True, None
+    
+    triggered_id = ctx.triggered[0]['prop_id']
+    triggered_dict = json.loads(triggered_id.split('.')[0])
+    property_id = triggered_dict['index']
+
+    if property_data:
+        clicked_property_data = [x for x in property_data if str(x['property_id']) == str(property_id)][0]
+        threading.Thread(target=fmapi_stream_draft_message, args=(clicked_property_data, event_name,)).start()
+        print("Turning on the interval-component-draft")
+        return False, property_id
+    else:
+        return True, None
+
+@app.callback(
+    [Output({"type": "draft-message-text", "index": dash.dependencies.ALL}, "children"),
+     Output({"type": "draft-message-text", "index": dash.dependencies.ALL}, "style"),
+     Output("interval-component-draft", "disabled", allow_duplicate=True)],
+    [Input("interval-component-draft", "n_intervals")],
+    [State('active-draft-message', 'data'),
+     State({"type": "draft-message-text", "index": dash.dependencies.ALL}, "id")],
+    prevent_initial_call=True,
+)
+def update_draft_message_response(n_intervals, active_property_id, text_ids):
+    global draft_message_response_list
+    global draft_message_stream_complete
+
+    if not active_property_id or not text_ids:
+        return [no_update] * len(text_ids), [no_update] * len(text_ids), True
+
+    # Initialize outputs
+    children_outputs = [no_update] * len(text_ids)
+    style_outputs = [no_update] * len(text_ids)
+    
+    # Find the index of the active property
+    active_index = None
+    for i, text_id in enumerate(text_ids):
+        if str(text_id['index']) == str(active_property_id):
+            active_index = i
+            break
+    
+    if active_index is None:
+        return children_outputs, style_outputs, True
+
+    visible_style = {
+        "display": "block",
+        "marginTop": "10px",
+        "padding": "10px",
+        "backgroundColor": "#1A1A1A",
+        "borderRadius": "4px",
+        "border": "1px solid #5A5A5A",
+        "color": "#FFFFFF",
+        "fontFamily": "Helvetica",
+        "fontSize": "11px",
+        "lineHeight": "1.5",
+        "whiteSpace": "pre-wrap"
+    }
+
+    if not draft_message_stream_complete:
+        # Stream is in process
+        current_text = "".join([x for x in draft_message_response_list if x is not None])
+        children_outputs[active_index] = current_text
+        style_outputs[active_index] = visible_style
+        return children_outputs, style_outputs, False
+    else:
+        # print("DRAFT MESSAGE STREAM IS DONE")
+        if len(draft_message_response_list) > 0:
+            final_results = [x for x in draft_message_response_list if x is not None]
+            children_outputs[active_index] = "".join(final_results)
+            style_outputs[active_index] = visible_style
+            draft_message_response_list = []
+            return children_outputs, style_outputs, True
+        return children_outputs, style_outputs, True
 
 if __name__ == "__main__":
     app.run(debug=True)
