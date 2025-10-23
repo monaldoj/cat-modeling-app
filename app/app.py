@@ -22,6 +22,7 @@ from shapely.geometry import Polygon, Point, box
 from shapely import wkt
 import threading
 import requests
+from urllib.parse import quote
 from assets.svg_icons import svg_pin_icon
 
 # Set up the app
@@ -994,6 +995,34 @@ app.layout = html.Div(
                                                         "border": "1px solid #4A4A4A"
                                                     }
                                                 ),
+                                                # Street View box
+                                                html.Div(
+                                                    [
+                                                        html.H5("📍 Street View",
+                                                               style={
+                                                                   "color": "#FFFFFF",
+                                                                   "fontFamily": "Helvetica",
+                                                                   "fontSize": "14px",
+                                                                   "marginBottom": "10px",
+                                                                   "fontWeight": "bold"
+                                                               }),
+                                                        html.Img(
+                                                            id="street-view-image",
+                                                            style={
+                                                                "width": "100%",
+                                                                "borderRadius": "4px",
+                                                                "border": "1px solid #5A5A5A"
+                                                            }
+                                                        )
+                                                    ],
+                                                    style={
+                                                        "marginBottom": "15px",
+                                                        "padding": "15px",
+                                                        "backgroundColor": "#2C2C2C",
+                                                        "borderRadius": "6px",
+                                                        "border": "1px solid #4A4A4A"
+                                                    }
+                                                ),
                                                 # Dashboard iframe
                                                 html.Iframe(
                                                     id="dashboard-iframe",
@@ -1779,6 +1808,7 @@ def filter_properties_by_portfolio(selected_portfolio_id, property_data, event_n
     # Create new property markers for filtered properties
     property_markers = []
     for idx, row in properties_df.iterrows():
+        # print(row['property_id'], row['housenumber'], row['street'], ',', row['city'], ',', row['state'], ',', row['postcode'])
         marker = dl.Marker(
             id={"type": "property-marker", "index": str(row['property_id'])},
             position=[row['lat'], row['lon']],
@@ -2052,6 +2082,71 @@ def toggle_property_analysis_overlay(property_btn_clicks, close_clicks, current_
         return hidden_style, no_update
     
     return no_update, no_update
+
+# Callback to update street view image based on selected property
+@app.callback(
+    Output('street-view-image', 'src'),
+    [Input('clicked-property', 'data')],
+    [State('property-data-store', 'data')],
+    prevent_initial_call=True
+)
+def update_street_view(property_id, property_data):
+    """Update street view image based on selected property address"""
+    if not property_id or not property_data:
+        return ""
+    
+    # Find the clicked property data
+    clicked_property_data = None
+    for prop in property_data:
+        if str(prop['property_id']) == str(property_id):
+            clicked_property_data = prop
+            break
+    
+    if not clicked_property_data:
+        return ""
+    
+    # Use local image file based on property_id
+    # Construct path to local image in assets/images/ directory
+    image_path = f"/assets/images/{property_id}.png"
+    
+    return image_path
+    
+    # TODO: Implement Google Maps Street View API call
+    # # Build the address string
+    # address_parts = []
+    # if clicked_property_data.get('housenumber'):
+    #     address_parts.append(str(clicked_property_data['housenumber']))
+    # if clicked_property_data.get('street'):
+    #     address_parts.append(str(clicked_property_data['street']))
+    # if clicked_property_data.get('city'):
+    #     address_parts.append(str(clicked_property_data['city']))
+    # if clicked_property_data.get('state'):
+    #     address_parts.append(str(clicked_property_data['state']))
+    # if clicked_property_data.get('postcode'):
+    #     address_parts.append(str(clicked_property_data['postcode']))
+    # 
+    # if not address_parts:
+    #     # If no address, use coordinates
+    #     if clicked_property_data.get('lat') and clicked_property_data.get('lon'):
+    #         location = f"{clicked_property_data['lat']},{clicked_property_data['lon']}"
+    #     else:
+    #         return ""
+    # else:
+    #     location = ", ".join(address_parts)
+    # 
+    # # Get Google Maps API key from environment
+    # google_maps_api_key = os.getenv("GOOGLE_MAPS_API_KEY", "")
+    # 
+    # if not google_maps_api_key:
+    #     print("Warning: GOOGLE_MAPS_API_KEY not set in environment variables")
+    #     # Return a placeholder or empty
+    #     return ""
+    # 
+    # # Build Google Street View Static API URL with properly encoded location
+    # encoded_location = quote(location)
+    # street_view_url = f"https://maps.googleapis.com/maps/api/streetview?size=600x400&location={encoded_location}&key={google_maps_api_key}"
+    # 
+    # return street_view_url
 
 # Callback to start dashboard AI Assessment streaming
 @app.callback(
