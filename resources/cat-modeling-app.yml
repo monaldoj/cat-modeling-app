@@ -11,6 +11,17 @@ resources:
           sql_warehouse:
             id: "d6d89fb9fd47b835" # "${var.sql_warehouse_id}"
             permission: "CAN_USE"
+        - name: "serving-endpoint"
+          description: "A serving endpoint for app to be able to work with"
+          serving_endpoint:
+            id: "databricks-llama-4-maverick" # "${var.serving_endpoint_id}"
+            permission: "CAN_USE"
+        - name: "DATABRICKS_TOKEN"
+          description: "A Databricks token for app to be able to work with"
+          secret:
+            scope: "justin-fe-secrets"
+            key: "fe_pat"
+            permission: "CAN_READ"
       user_api_scopes:
         - sql
 

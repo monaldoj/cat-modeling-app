@@ -5,5 +5,7 @@ command: [
 env:
 - name: "DATABRICKS_WAREHOUSE_ID"
   valueFrom: "sql-warehouse"
+- name: "LLM_ENDPOINT"
+  valueFrom: "serving-endpoint"
 # - name: "DATABRICKS_TOKEN"
 #   valueFrom: "DATABRICKS_TOKEN"

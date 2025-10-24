@@ -138,7 +138,7 @@ def sqlQuery(query: str) -> pd.DataFrame:
             df = pd.DataFrame(rows, columns=columns)
         return df
 
-def fmapi_stream_ai_assessment(clicked_property_data, event_name):
+def fmapi_stream_ai_assessment(token, host, model, clicked_property_data, event_name):
     global response_list
     global stream_complete
 
@@ -147,11 +147,13 @@ def fmapi_stream_ai_assessment(clicked_property_data, event_name):
     stream_complete = False
 
     if clicked_property_data and event_name:
-        databricks_host = "https://" + get_databricks_server_hostname()
-        databricks_token = get_databricks_token()
-        model = 'databricks-meta-llama-3-3-70b-instruct'
-        # model = 'databricks-dbrx-instruct'
+        databricks_host = "https://" + host # get_databricks_server_hostname()
+        databricks_token = token # get_databricks_token()
+        # model = os.getenv("LLM_ENDPOINT") # 'databricks-meta-llama-3-3-70b-instruct'
+        # # model = 'databricks-dbrx-instruct'
         endpoint = f"{databricks_host}/serving-endpoints/{model}/invocations"
+        # endpoint = os.getenv("LLM_ENDPOINT")
+        print("ENDPOINT:", endpoint)
 
         # Define the headers, including the authorization token
         headers = {
@@ -198,7 +200,7 @@ def fmapi_stream_ai_assessment(clicked_property_data, event_name):
     print("SETTING STREAM COMPLETE TO TRUE")
     stream_complete = True
 
-def fmapi_stream_draft_message(clicked_property_data, event_name):
+def fmapi_stream_draft_message(token, host, model, clicked_property_data, event_name):
     global draft_message_response_list
     global draft_message_stream_complete
 
@@ -207,11 +209,12 @@ def fmapi_stream_draft_message(clicked_property_data, event_name):
     draft_message_stream_complete = False
 
     if clicked_property_data and event_name:
-        databricks_host = "https://" + get_databricks_server_hostname()
-        databricks_token = get_databricks_token()
-        model = 'databricks-meta-llama-3-3-70b-instruct'
+        databricks_host = "https://" + host # get_databricks_server_hostname()
+        databricks_token = token # get_databricks_token()
+        # model = 'databricks-meta-llama-3-3-70b-instruct'
         # model = 'databricks-dbrx-instruct'
         endpoint = f"{databricks_host}/serving-endpoints/{model}/invocations"
+        print("ENDPOINT:", endpoint)
 
         # Define the headers, including the authorization token
         headers = {
@@ -903,6 +906,92 @@ app.layout = html.Div(
                                         # Scrollable container for dashboard content
                                         html.Div(
                                             [
+                                                # Property Images box
+                                                html.Div(
+                                                    [
+                                                        html.H5("Property Images",
+                                                               style={
+                                                                   "color": "#FFFFFF",
+                                                                   "fontFamily": "Helvetica",
+                                                                   "fontSize": "14px",
+                                                                   "marginBottom": "15px",
+                                                                   "fontWeight": "bold"
+                                                               }),
+                                                        html.Div(
+                                                            [
+                                                                # Left column - Original image
+                                                                html.Div(
+                                                                    [
+                                                                        html.H6("Original",
+                                                                               style={
+                                                                                   "color": "#CCCCCC",
+                                                                                   "fontFamily": "Helvetica",
+                                                                                   "fontSize": "12px",
+                                                                                   "marginBottom": "8px",
+                                                                                   "fontWeight": "bold"
+                                                                               }),
+                                                                        html.Div(
+                                                                            id="property-image-original-container",
+                                                                            children=[],
+                                                                            style={
+                                                                                "minHeight": "200px",
+                                                                                "display": "flex",
+                                                                                "alignItems": "center",
+                                                                                "justifyContent": "center"
+                                                                            }
+                                                                        )
+                                                                    ],
+                                                                    style={
+                                                                        "width": "48%",
+                                                                        "display": "inline-block",
+                                                                        "verticalAlign": "top"
+                                                                    }
+                                                                ),
+                                                                # Right column - Damaged image
+                                                                html.Div(
+                                                                    [
+                                                                        html.H6("Damaged",
+                                                                               style={
+                                                                                   "color": "#CCCCCC",
+                                                                                   "fontFamily": "Helvetica",
+                                                                                   "fontSize": "12px",
+                                                                                   "marginBottom": "8px",
+                                                                                   "fontWeight": "bold"
+                                                                               }),
+                                                                        html.Div(
+                                                                            id="property-image-damaged-container",
+                                                                            children=[],
+                                                                            style={
+                                                                                "minHeight": "200px",
+                                                                                "display": "flex",
+                                                                                "alignItems": "center",
+                                                                                "justifyContent": "center"
+                                                                            }
+                                                                        )
+                                                                    ],
+                                                                    style={
+                                                                        "width": "48%",
+                                                                        "display": "inline-block",
+                                                                        "verticalAlign": "top",
+                                                                        "marginLeft": "4%"
+                                                                    }
+                                                                )
+                                                            ],
+                                                            style={
+                                                                "display": "flex",
+                                                                "justifyContent": "space-between",
+                                                                "width": "100%"
+                                                            }
+                                                        )
+                                                    ],
+                                                    style={
+                                                        "marginBottom": "15px",
+                                                        "padding": "15px",
+                                                        "backgroundColor": "#2C2C2C",
+                                                        "borderRadius": "6px",
+                                                        "border": "1px solid #4A4A4A"
+                                                    }
+                                                ),
                                                 # AI Assessment box
                                                 html.Div(
                                                     [
@@ -995,96 +1084,10 @@ app.layout = html.Div(
                                                         "border": "1px solid #4A4A4A"
                                                     }
                                                 ),
-                                                # Property Images box
-                                                html.Div(
-                                                    [
-                                                        html.H5("Property Images",
-                                                               style={
-                                                                   "color": "#FFFFFF",
-                                                                   "fontFamily": "Helvetica",
-                                                                   "fontSize": "14px",
-                                                                   "marginBottom": "15px",
-                                                                   "fontWeight": "bold"
-                                                               }),
-                                                        html.Div(
-                                                            [
-                                                                # Left column - Original image
-                                                                html.Div(
-                                                                    [
-                                                                        html.H6("Original",
-                                                                               style={
-                                                                                   "color": "#CCCCCC",
-                                                                                   "fontFamily": "Helvetica",
-                                                                                   "fontSize": "12px",
-                                                                                   "marginBottom": "8px",
-                                                                                   "fontWeight": "bold"
-                                                                               }),
-                                                                        html.Div(
-                                                                            id="property-image-original-container",
-                                                                            children=[],
-                                                                            style={
-                                                                                "minHeight": "200px",
-                                                                                "display": "flex",
-                                                                                "alignItems": "center",
-                                                                                "justifyContent": "center"
-                                                                            }
-                                                                        )
-                                                                    ],
-                                                                    style={
-                                                                        "width": "48%",
-                                                                        "display": "inline-block",
-                                                                        "verticalAlign": "top"
-                                                                    }
-                                                                ),
-                                                                # Right column - Damaged image
-                                                                html.Div(
-                                                                    [
-                                                                        html.H6("Damaged",
-                                                                               style={
-                                                                                   "color": "#CCCCCC",
-                                                                                   "fontFamily": "Helvetica",
-                                                                                   "fontSize": "12px",
-                                                                                   "marginBottom": "8px",
-                                                                                   "fontWeight": "bold"
-                                                                               }),
-                                                                        html.Div(
-                                                                            id="property-image-damaged-container",
-                                                                            children=[],
-                                                                            style={
-                                                                                "minHeight": "200px",
-                                                                                "display": "flex",
-                                                                                "alignItems": "center",
-                                                                                "justifyContent": "center"
-                                                                            }
-                                                                        )
-                                                                    ],
-                                                                    style={
-                                                                        "width": "48%",
-                                                                        "display": "inline-block",
-                                                                        "verticalAlign": "top",
-                                                                        "marginLeft": "4%"
-                                                                    }
-                                                                )
-                                                            ],
-                                                            style={
-                                                                "display": "flex",
-                                                                "justifyContent": "space-between",
-                                                                "width": "100%"
-                                                            }
-                                                        )
-                                                    ],
-                                                    style={
-                                                        "marginBottom": "15px",
-                                                        "padding": "15px",
-                                                        "backgroundColor": "#2C2C2C",
-                                                        "borderRadius": "6px",
-                                                        "border": "1px solid #4A4A4A"
-                                                    }
-                                                ),
                                                 # Dashboard iframe
                                                 html.Iframe(
                                                     id="dashboard-iframe",
-                                                    src="",  # Will be set dynamically or via config
+                                                    src="https://e2-demo-field-eng.cloud.databricks.com/embed/dashboardsv3/01f0920e08aa11e08a822686b5ab9f57?o=1444828305810485",  # Will be set dynamically or via config
                                                     style={
                                                         "width": "100%",
                                                         "height": "400px",
@@ -1917,7 +1920,8 @@ def start_text_update(btn_clicks, property_data, event_name):
 
     if property_data:
         clicked_property_data = [x for x in property_data if str(x['property_id']) == str(property_id)][0]
-        threading.Thread(target=fmapi_stream_ai_assessment, args=(clicked_property_data, event_name,)).start()
+        model = os.getenv("LLM_ENDPOINT")
+        threading.Thread(target=fmapi_stream_ai_assessment, args=(get_databricks_token(), get_databricks_server_hostname(), model, clicked_property_data, event_name,)).start()
         print("Turning on the interval-component")
         return False, property_id
     else:
@@ -2009,7 +2013,8 @@ def start_draft_message_update(btn_clicks, property_data, event_name):
 
     if property_data:
         clicked_property_data = [x for x in property_data if str(x['property_id']) == str(property_id)][0]
-        threading.Thread(target=fmapi_stream_draft_message, args=(clicked_property_data, event_name,)).start()
+        model = os.getenv("LLM_ENDPOINT")
+        threading.Thread(target=fmapi_stream_draft_message, args=(get_databricks_token(), get_databricks_server_hostname(), model, clicked_property_data, event_name,)).start()
         print("Turning on the interval-component-draft")
         return False, property_id
     else:
@@ -2237,7 +2242,8 @@ def start_dashboard_ai_assessment(n_clicks, property_id, property_data, event_na
         return True
     
     # Start streaming in a thread
-    threading.Thread(target=fmapi_stream_ai_assessment, args=(clicked_property_data, event_name,)).start()
+    model = os.getenv("LLM_ENDPOINT")
+    threading.Thread(target=fmapi_stream_ai_assessment, args=(get_databricks_token(), get_databricks_server_hostname(), model, clicked_property_data, event_name,)).start()
     print("Starting dashboard AI assessment stream")
     return False  # Enable interval
 
@@ -2301,7 +2307,8 @@ def start_dashboard_draft_email(n_clicks, property_id, property_data, event_name
         return True
     
     # Start streaming in a thread
-    threading.Thread(target=fmapi_stream_draft_message, args=(clicked_property_data, event_name,)).start()
+    model = os.getenv("LLM_ENDPOINT")
+    threading.Thread(target=fmapi_stream_draft_message, args=(get_databricks_token(), get_databricks_server_hostname(), model, clicked_property_data, event_name,)).start()
     print("Starting dashboard draft email stream")
     return False  # Enable interval
 
