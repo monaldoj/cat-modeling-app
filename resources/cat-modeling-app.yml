@@ -14,14 +14,14 @@ resources:
         - name: "serving-endpoint"
           description: "A serving endpoint for app to be able to work with"
           serving_endpoint:
-            id: "databricks-llama-4-maverick" # "${var.serving_endpoint_id}"
-            permission: "CAN_USE"
+            name: "databricks-llama-4-maverick" # "${var.serving_endpoint_id}"
+            permission: "CAN_QUERY"
         - name: "DATABRICKS_TOKEN"
           description: "A Databricks token for app to be able to work with"
           secret:
-            scope: "justin-fe-secrets"
+            scope: "justinm-gcp-secrets"
             key: "fe_pat"
-            permission: "CAN_READ"
+            permission: "READ"
       user_api_scopes:
         - sql
 
