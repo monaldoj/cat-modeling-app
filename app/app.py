@@ -995,23 +995,81 @@ app.layout = html.Div(
                                                         "border": "1px solid #4A4A4A"
                                                     }
                                                 ),
-                                                # Street View box
+                                                # Property Images box
                                                 html.Div(
                                                     [
-                                                        html.H5("📍 Street View",
+                                                        html.H5("Property Images",
                                                                style={
                                                                    "color": "#FFFFFF",
                                                                    "fontFamily": "Helvetica",
                                                                    "fontSize": "14px",
-                                                                   "marginBottom": "10px",
+                                                                   "marginBottom": "15px",
                                                                    "fontWeight": "bold"
                                                                }),
-                                                        html.Img(
-                                                            id="street-view-image",
+                                                        html.Div(
+                                                            [
+                                                                # Left column - Original image
+                                                                html.Div(
+                                                                    [
+                                                                        html.H6("Original",
+                                                                               style={
+                                                                                   "color": "#CCCCCC",
+                                                                                   "fontFamily": "Helvetica",
+                                                                                   "fontSize": "12px",
+                                                                                   "marginBottom": "8px",
+                                                                                   "fontWeight": "bold"
+                                                                               }),
+                                                                        html.Div(
+                                                                            id="property-image-original-container",
+                                                                            children=[],
+                                                                            style={
+                                                                                "minHeight": "200px",
+                                                                                "display": "flex",
+                                                                                "alignItems": "center",
+                                                                                "justifyContent": "center"
+                                                                            }
+                                                                        )
+                                                                    ],
+                                                                    style={
+                                                                        "width": "48%",
+                                                                        "display": "inline-block",
+                                                                        "verticalAlign": "top"
+                                                                    }
+                                                                ),
+                                                                # Right column - Damaged image
+                                                                html.Div(
+                                                                    [
+                                                                        html.H6("Damaged",
+                                                                               style={
+                                                                                   "color": "#CCCCCC",
+                                                                                   "fontFamily": "Helvetica",
+                                                                                   "fontSize": "12px",
+                                                                                   "marginBottom": "8px",
+                                                                                   "fontWeight": "bold"
+                                                                               }),
+                                                                        html.Div(
+                                                                            id="property-image-damaged-container",
+                                                                            children=[],
+                                                                            style={
+                                                                                "minHeight": "200px",
+                                                                                "display": "flex",
+                                                                                "alignItems": "center",
+                                                                                "justifyContent": "center"
+                                                                            }
+                                                                        )
+                                                                    ],
+                                                                    style={
+                                                                        "width": "48%",
+                                                                        "display": "inline-block",
+                                                                        "verticalAlign": "top",
+                                                                        "marginLeft": "4%"
+                                                                    }
+                                                                )
+                                                            ],
                                                             style={
-                                                                "width": "100%",
-                                                                "borderRadius": "4px",
-                                                                "border": "1px solid #5A5A5A"
+                                                                "display": "flex",
+                                                                "justifyContent": "space-between",
+                                                                "width": "100%"
                                                             }
                                                         )
                                                     ],
@@ -2083,17 +2141,29 @@ def toggle_property_analysis_overlay(property_btn_clicks, close_clicks, current_
     
     return no_update, no_update
 
-# Callback to update street view image based on selected property
+# Callback to update property images (original and damaged) based on selected property
 @app.callback(
-    Output('street-view-image', 'src'),
+    [Output('property-image-original-container', 'children'),
+     Output('property-image-damaged-container', 'children')],
     [Input('clicked-property', 'data')],
     [State('property-data-store', 'data')],
     prevent_initial_call=True
 )
-def update_street_view(property_id, property_data):
-    """Update street view image based on selected property address"""
+def update_property_images(property_id, property_data):
+    """Update property images (original and damaged) based on selected property"""
+    no_image_text = html.Div(
+        "No image available.",
+        style={
+            "color": "#999999",
+            "fontFamily": "Helvetica",
+            "fontSize": "12px",
+            "fontStyle": "italic",
+            "textAlign": "center"
+        }
+    )
+    
     if not property_id or not property_data:
-        return ""
+        return no_image_text, no_image_text
     
     # Find the clicked property data
     clicked_property_data = None
@@ -2103,50 +2173,44 @@ def update_street_view(property_id, property_data):
             break
     
     if not clicked_property_data:
-        return ""
+        return no_image_text, no_image_text
     
-    # Use local image file based on property_id
-    # Construct path to local image in assets/images/ directory
-    image_path = f"/assets/images/{property_id}.png"
+    # Construct file paths for both images
+    original_image_path = f"/assets/images/{property_id}.png"
+    damaged_image_path = f"/assets/images/{property_id}_damaged.png"
     
-    return image_path
+    # Check if images exist on the file system
+    app_directory = os.path.dirname(os.path.abspath(__file__))
+    original_file_exists = os.path.exists(os.path.join(app_directory, f"assets/images/{property_id}.png"))
+    damaged_file_exists = os.path.exists(os.path.join(app_directory, f"assets/images/{property_id}_damaged.png"))
     
-    # TODO: Implement Google Maps Street View API call
-    # # Build the address string
-    # address_parts = []
-    # if clicked_property_data.get('housenumber'):
-    #     address_parts.append(str(clicked_property_data['housenumber']))
-    # if clicked_property_data.get('street'):
-    #     address_parts.append(str(clicked_property_data['street']))
-    # if clicked_property_data.get('city'):
-    #     address_parts.append(str(clicked_property_data['city']))
-    # if clicked_property_data.get('state'):
-    #     address_parts.append(str(clicked_property_data['state']))
-    # if clicked_property_data.get('postcode'):
-    #     address_parts.append(str(clicked_property_data['postcode']))
-    # 
-    # if not address_parts:
-    #     # If no address, use coordinates
-    #     if clicked_property_data.get('lat') and clicked_property_data.get('lon'):
-    #         location = f"{clicked_property_data['lat']},{clicked_property_data['lon']}"
-    #     else:
-    #         return ""
-    # else:
-    #     location = ", ".join(address_parts)
-    # 
-    # # Get Google Maps API key from environment
-    # google_maps_api_key = os.getenv("GOOGLE_MAPS_API_KEY", "")
-    # 
-    # if not google_maps_api_key:
-    #     print("Warning: GOOGLE_MAPS_API_KEY not set in environment variables")
-    #     # Return a placeholder or empty
-    #     return ""
-    # 
-    # # Build Google Street View Static API URL with properly encoded location
-    # encoded_location = quote(location)
-    # street_view_url = f"https://maps.googleapis.com/maps/api/streetview?size=600x400&location={encoded_location}&key={google_maps_api_key}"
-    # 
-    # return street_view_url
+    # Create original image component or placeholder
+    if original_file_exists:
+        original_content = html.Img(
+            src=original_image_path,
+            style={
+                "width": "100%",
+                "borderRadius": "4px",
+                "border": "1px solid #5A5A5A"
+            }
+        )
+    else:
+        original_content = no_image_text
+    
+    # Create damaged image component or placeholder
+    if damaged_file_exists:
+        damaged_content = html.Img(
+            src=damaged_image_path,
+            style={
+                "width": "100%",
+                "borderRadius": "4px",
+                "border": "1px solid #5A5A5A"
+            }
+        )
+    else:
+        damaged_content = no_image_text
+    
+    return original_content, damaged_content
 
 # Callback to start dashboard AI Assessment streaming
 @app.callback(
