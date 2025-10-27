@@ -1,5 +1,6 @@
 import os
 from databricks import sql
+import databricks
 from databricks.sdk.core import Config
 import pandas as pd
 import numpy as np
@@ -120,6 +121,37 @@ def get_databricks_server_hostname():
         DATABRICKS_SERVER_HOSTNAME = cfg.host
     return DATABRICKS_SERVER_HOSTNAME
 
+def get_databricks_sp_token():
+    DATABRICKS_TOKEN = os.getenv("DATABRICKS_TOKEN")
+
+    if not DATABRICKS_TOKEN:
+        print("DATABRICKS_TOKEN not set in environment variables, using SP authentication.")
+        host = get_databricks_server_hostname()
+        DATABRICKS_HOST = "https://" + host
+        CLIENT_ID = os.getenv("DATABRICKS_CLIENT_ID")
+        CLIENT_SECRET = os.getenv("DATABRICKS_CLIENT_SECRET")
+
+        # OAuth endpoint for Databricks on GCP
+        TOKEN_URL = f"{DATABRICKS_HOST}/oidc/v1/token"
+
+        # Request an access token
+        token_response = requests.post(
+            TOKEN_URL,
+            data={
+                "grant_type": "client_credentials",
+                "scope": "all-apis",
+            },
+            auth=(CLIENT_ID, CLIENT_SECRET),
+        )
+
+        token_response.raise_for_status()
+        DATABRICKS_TOKEN = token_response.json()["access_token"]
+
+        print("SP access token retrieved successfully")
+
+    return DATABRICKS_TOKEN
+
+
 def sqlQuery(query: str) -> pd.DataFrame:
     """Execute a SQL query and return the result as a pandas DataFrame."""
     # print("RUNNING QUERY:", query)
@@ -150,9 +182,7 @@ def fmapi_stream_ai_assessment(token, host, model, clicked_property_data, event_
         databricks_host = "https://" + host # get_databricks_server_hostname()
         databricks_token = token # get_databricks_token()
         # model = os.getenv("LLM_ENDPOINT") # 'databricks-meta-llama-3-3-70b-instruct'
-        # # model = 'databricks-dbrx-instruct'
         endpoint = f"{databricks_host}/serving-endpoints/{model}/invocations"
-        # endpoint = os.getenv("LLM_ENDPOINT")
         print("ENDPOINT:", endpoint)
 
         # Define the headers, including the authorization token
@@ -176,6 +206,15 @@ def fmapi_stream_ai_assessment(token, host, model, clicked_property_data, event_
         # Make the POST request with streaming enabled
         response = requests.post(endpoint, headers=headers, data=json.dumps(payload), stream=True)
         print(response)
+        print("RESPONSE STATUS CODE:", response.status_code, type(response.status_code))
+        print("RESPONSE:", response.text)
+        # if response.status_code == 403:
+        #     databricks_sp_token = get_databricks_sp_token()
+        #     headers["Authorization"] = f"Bearer {databricks_sp_token}"
+        #     response = requests.post(endpoint, headers=headers, data=json.dumps(payload), stream=True)
+        #     print("SP RESPONSE STATUS CODE:", response.status_code, type(response.status_code))
+        #     print("SP RESPONSE:", response.text)
+
         try:
             for chunk in response.iter_content(chunk_size=None):
                 if chunk:
@@ -780,10 +819,10 @@ app.layout = html.Div(
                             color='#3A3A3A',
                             overlay_style={"visibility":"visible", "filter": "blur(3px)"},
                         ),
-                    dcc.Interval(id="interval-component", interval=100, n_intervals=0, disabled=True),  # Check every n milliseconds
-                    dcc.Interval(id="interval-component-draft", interval=100, n_intervals=0, disabled=True),  # Check every n milliseconds for draft messages
-                    dcc.Interval(id="dashboard-interval-ai", interval=100, n_intervals=0, disabled=True),  # Dashboard AI Assessment interval
-                    dcc.Interval(id="dashboard-interval-email", interval=100, n_intervals=0, disabled=True),  # Dashboard Draft Email interval
+                    dcc.Interval(id="interval-component", interval=200, n_intervals=0, disabled=True),  # Check every n milliseconds
+                    dcc.Interval(id="interval-component-draft", interval=200, n_intervals=0, disabled=True),  # Check every n milliseconds for draft messages
+                    dcc.Interval(id="dashboard-interval-ai", interval=200, n_intervals=0, disabled=True),  # Dashboard AI Assessment interval
+                    dcc.Interval(id="dashboard-interval-email", interval=200, n_intervals=0, disabled=True),  # Dashboard Draft Email interval
                     ],
                     style={"width": "75%", "display": "inline-block", "verticalAlign": "top", "position": "relative"}
                 ),
@@ -1921,7 +1960,7 @@ def start_text_update(btn_clicks, property_data, event_name):
     if property_data:
         clicked_property_data = [x for x in property_data if str(x['property_id']) == str(property_id)][0]
         model = os.getenv("LLM_ENDPOINT")
-        threading.Thread(target=fmapi_stream_ai_assessment, args=(get_databricks_token(), get_databricks_server_hostname(), model, clicked_property_data, event_name,)).start()
+        threading.Thread(target=fmapi_stream_ai_assessment, args=(get_databricks_sp_token(), get_databricks_server_hostname(), model, clicked_property_data, event_name,)).start()
         print("Turning on the interval-component")
         return False, property_id
     else:
@@ -2014,7 +2053,7 @@ def start_draft_message_update(btn_clicks, property_data, event_name):
     if property_data:
         clicked_property_data = [x for x in property_data if str(x['property_id']) == str(property_id)][0]
         model = os.getenv("LLM_ENDPOINT")
-        threading.Thread(target=fmapi_stream_draft_message, args=(get_databricks_token(), get_databricks_server_hostname(), model, clicked_property_data, event_name,)).start()
+        threading.Thread(target=fmapi_stream_draft_message, args=(get_databricks_sp_token(), get_databricks_server_hostname(), model, clicked_property_data, event_name,)).start()
         print("Turning on the interval-component-draft")
         return False, property_id
     else:
@@ -2243,7 +2282,7 @@ def start_dashboard_ai_assessment(n_clicks, property_id, property_data, event_na
     
     # Start streaming in a thread
     model = os.getenv("LLM_ENDPOINT")
-    threading.Thread(target=fmapi_stream_ai_assessment, args=(get_databricks_token(), get_databricks_server_hostname(), model, clicked_property_data, event_name,)).start()
+    threading.Thread(target=fmapi_stream_ai_assessment, args=(get_databricks_sp_token(), get_databricks_server_hostname(), model, clicked_property_data, event_name,)).start()
     print("Starting dashboard AI assessment stream")
     return False  # Enable interval
 
@@ -2308,7 +2347,7 @@ def start_dashboard_draft_email(n_clicks, property_id, property_data, event_name
     
     # Start streaming in a thread
     model = os.getenv("LLM_ENDPOINT")
-    threading.Thread(target=fmapi_stream_draft_message, args=(get_databricks_token(), get_databricks_server_hostname(), model, clicked_property_data, event_name,)).start()
+    threading.Thread(target=fmapi_stream_draft_message, args=(get_databricks_sp_token(), get_databricks_server_hostname(), model, clicked_property_data, event_name,)).start()
     print("Starting dashboard draft email stream")
     return False  # Enable interval
 

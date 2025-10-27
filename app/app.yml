@@ -7,5 +7,5 @@ env:
   valueFrom: "sql-warehouse"
 - name: "LLM_ENDPOINT"
   valueFrom: "serving-endpoint"
-- name: "DATABRICKS_TOKEN"
-  valueFrom: "DATABRICKS_TOKEN"
+# - name: "DATABRICKS_TOKEN"
+#   valueFrom: "DATABRICKS_TOKEN"
