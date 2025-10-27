@@ -16,12 +16,12 @@ resources:
           serving_endpoint:
             name: "databricks-llama-4-maverick" # "${var.serving_endpoint_id}"
             permission: "CAN_QUERY"
-        - name: "DATABRICKS_TOKEN"
-          description: "A Databricks token for app to be able to work with"
-          secret:
-            scope: "justinm-gcp-secrets"
-            key: "fe_pat"
-            permission: "READ"
+        # - name: "DATABRICKS_TOKEN"
+        #   description: "A Databricks token for app to be able to work with"
+        #   secret:
+        #     scope: "justinm-gcp-secrets"
+        #     key: "fe_pat"
+        #     permission: "READ"
       user_api_scopes:
         - sql
 
