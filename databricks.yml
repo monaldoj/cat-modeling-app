@@ -6,6 +6,15 @@ bundle:
 include:
   - resources/*.yml
 
+variables:
+  DASHBOARD_URL: 
+    description: "A dashboard url for app to be able to embed"
+  SQL_WAREHOUSE_ID:
+    description: "A SQL warehouse id for app to be able to work with"
+  SERVING_ENDPOINT_NAME:
+    description: "A serving endpoint id for app to be able to work with"
+    default: "databricks-gpt-oss-120b"
+
 targets:
   dev:
     mode: development

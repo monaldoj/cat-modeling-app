@@ -31,7 +31,8 @@ app = DashProxy(__name__)
 
 # Check for environment variables but don't fail if they're not set (for development)
 DATABRICKS_WAREHOUSE_ID = os.getenv("DATABRICKS_WAREHOUSE_ID")
-default_catalog = "timo"
+DASHBOARD_URL = os.getenv("DASHBOARD_URL")
+default_catalog = "financial_services"
 default_schema = "cat_risk"
 default_table = "cat_risk_scores_h3"
 default_column = "h3_index"
@@ -68,6 +69,8 @@ stream_complete = True
 # List to hold draft message responses
 draft_message_response_list = []
 draft_message_stream_complete = True
+
+global_databricks_sp_token = None
 
 icon_style_core = dict(iconUrl=svg_pin_icon("#4CAF50"), iconSize=[40, 40], iconAnchor=[20, 40])
 icon_style_secondary = dict(iconUrl=svg_pin_icon("#FFFF33"), iconSize=[40, 40], iconAnchor=[20, 40])
@@ -122,32 +125,44 @@ def get_databricks_server_hostname():
     return DATABRICKS_SERVER_HOSTNAME
 
 def get_databricks_sp_token():
-    DATABRICKS_TOKEN = os.getenv("DATABRICKS_TOKEN")
+    global global_databricks_sp_token
+    if global_databricks_sp_token:
+        return global_databricks_sp_token
+    else:
+        DATABRICKS_TOKEN = os.getenv("DATABRICKS_TOKEN")
 
-    if not DATABRICKS_TOKEN:
-        print("DATABRICKS_TOKEN not set in environment variables, using SP authentication.")
-        host = get_databricks_server_hostname()
-        DATABRICKS_HOST = "https://" + host
-        CLIENT_ID = os.getenv("DATABRICKS_CLIENT_ID")
-        CLIENT_SECRET = os.getenv("DATABRICKS_CLIENT_SECRET")
+        if not DATABRICKS_TOKEN:
+            print("DATABRICKS_TOKEN not set in environment variables, using SP authentication.")
+            host = get_databricks_server_hostname()
+            DATABRICKS_HOST = "https://" + host
+            CLIENT_ID = os.getenv("DATABRICKS_CLIENT_ID")
+            CLIENT_SECRET = os.getenv("DATABRICKS_CLIENT_SECRET")
 
-        # OAuth endpoint for Databricks on GCP
-        TOKEN_URL = f"{DATABRICKS_HOST}/oidc/v1/token"
+            if not CLIENT_ID or not CLIENT_SECRET:
+                print("DATABRICKS_CLIENT_ID or DATABRICKS_CLIENT_SECRET not set in environment variables, using on-behalf-of authentication via get_databricks_token().")
+                DATABRICKS_TOKEN = get_databricks_token()
+                global_databricks_sp_token = DATABRICKS_TOKEN
+                return DATABRICKS_TOKEN
 
-        # Request an access token
-        token_response = requests.post(
-            TOKEN_URL,
-            data={
-                "grant_type": "client_credentials",
-                "scope": "all-apis",
-            },
-            auth=(CLIENT_ID, CLIENT_SECRET),
-        )
+            # OAuth endpoint for Databricks on GCP
+            TOKEN_URL = f"{DATABRICKS_HOST}/oidc/v1/token"
+            token_response = requests.post(
+                TOKEN_URL,
+                data={
+                    "grant_type": "client_credentials",
+                    "scope": "all-apis",
+                },
+                auth=(CLIENT_ID, CLIENT_SECRET),
+            )
 
-        token_response.raise_for_status()
-        DATABRICKS_TOKEN = token_response.json()["access_token"]
+            token_response.raise_for_status()
+            DATABRICKS_TOKEN = token_response.json()["access_token"]
 
-        print("SP access token retrieved successfully")
+            print("SP access token retrieved successfully")
+        else:
+            print("TOKEN SET AS DATABRICKS_TOKEN, USING ENV TOKEN.")
+
+    global_databricks_sp_token = DATABRICKS_TOKEN
 
     return DATABRICKS_TOKEN
 
@@ -156,7 +171,7 @@ def sqlQuery(query: str) -> pd.DataFrame:
     """Execute a SQL query and return the result as a pandas DataFrame."""
     # print("RUNNING QUERY:", query)
     DATABRICKS_SERVER_HOSTNAME = get_databricks_server_hostname()
-    DATABRICKS_TOKEN = get_databricks_token()
+    DATABRICKS_TOKEN = get_databricks_sp_token()
     with sql.connect(
         http_path=f"/sql/1.0/warehouses/{DATABRICKS_WAREHOUSE_ID}",
         server_hostname=DATABRICKS_SERVER_HOSTNAME,
@@ -179,6 +194,7 @@ def fmapi_stream_ai_assessment(token, host, model, clicked_property_data, event_
     stream_complete = False
 
     if clicked_property_data and event_name:
+        host = host.replace("https://", "")
         databricks_host = "https://" + host # get_databricks_server_hostname()
         databricks_token = token # get_databricks_token()
         # model = os.getenv("LLM_ENDPOINT") # 'databricks-meta-llama-3-3-70b-instruct'
@@ -198,16 +214,16 @@ def fmapi_stream_ai_assessment(token, host, model, clicked_property_data, event_
                 {"role": "system", "content": "You are an insurance risk assessor. You are given a property and you need to write a brief payout assessment of the property with respect to a catasrophic event."},
                 {"role": "user", "content": f"Please write a one-sentence payout assessment of the potential damage to the following property as inflicted by the catastrophic event: {event_name} \n\n {clicked_property_data}"}
             ],
-            "max_tokens": 256,
+            # "max_tokens": 256,
             "stream": True  # Enable streaming
         }
 
         # print(endpoint, payload)
         # Make the POST request with streaming enabled
         response = requests.post(endpoint, headers=headers, data=json.dumps(payload), stream=True)
-        print(response)
-        print("RESPONSE STATUS CODE:", response.status_code, type(response.status_code))
-        print("RESPONSE:", response.text)
+        # print(response)
+        # print("RESPONSE STATUS CODE:", response.status_code, type(response.status_code))
+        # print("RESPONSE:", response.text)
         # if response.status_code == 403:
         #     databricks_sp_token = get_databricks_sp_token()
         #     headers["Authorization"] = f"Bearer {databricks_sp_token}"
@@ -248,6 +264,7 @@ def fmapi_stream_draft_message(token, host, model, clicked_property_data, event_
     draft_message_stream_complete = False
 
     if clicked_property_data and event_name:
+        host = host.replace("https://", "")
         databricks_host = "https://" + host # get_databricks_server_hostname()
         databricks_token = token # get_databricks_token()
         # model = 'databricks-meta-llama-3-3-70b-instruct'
@@ -268,7 +285,7 @@ def fmapi_stream_draft_message(token, host, model, clicked_property_data, event_
                 {"role": "system", "content": "You are a professional insurance claims adjuster. You are drafting a message to the property owner about their claim."},
                 {"role": "user", "content": f"Please draft a brief, professional message to the property owner regarding the catastrophic event: {event_name} and their property. The message should be empathetic and informative. \n\n Property details: {clicked_property_data}"}
             ],
-            "max_tokens": 256,
+            # "max_tokens": 256,
             "stream": True  # Enable streaming
         }
 
@@ -304,7 +321,7 @@ def fmapi_stream_draft_message(token, host, model, clicked_property_data, event_
 def get_data(catastrophe_type=None, resolution=9, bounds=None, column_resolution=None):
     stime = dt.datetime.now()
     
-    catalog = "timo"
+    catalog = "financial_services"
     schema = "cat_risk"
     table = "cat_risk_scores_h3"
     column = "h3_index"
@@ -326,7 +343,7 @@ def get_data(catastrophe_type=None, resolution=9, bounds=None, column_resolution
                         h3_toparent({column}, {resolution}) as h3_cell_id,
                         MAX({catastrophe_type}) as value
                         -- AVG(coalesce({catastrophe_type}, 0)) as value
-                    FROM timo.cat_risk.cat_risk_scores_h3 -- {catalog}.{schema}.{table}
+                    FROM {default_catalog}.{default_schema}.cat_risk_scores_h3 -- {catalog}.{schema}.{table}
                     WHERE {f"h3_toparent({column}, {resolution}) IN (SELECT EXPLODE(H3_COVERASH3('{bounds_wkt}', {resolution})))" if bounds_wkt else "1=1"}
                     GROUP BY h3_cell_id
                     HAVING value > 0
@@ -355,7 +372,7 @@ def get_data(catastrophe_type=None, resolution=9, bounds=None, column_resolution
 
 def get_events():
     DATABRICKS_SERVER_HOSTNAME = get_databricks_server_hostname()
-    DATABRICKS_TOKEN = get_databricks_token()
+    DATABRICKS_TOKEN = get_databricks_sp_token()
     with sql.connect(
         http_path=f"/sql/1.0/warehouses/{DATABRICKS_WAREHOUSE_ID}",
         server_hostname=DATABRICKS_SERVER_HOSTNAME,
@@ -364,18 +381,19 @@ def get_events():
         with connection.cursor() as cursor:
             query = f"""
                 SELECT DISTINCT event_name
-                FROM timo.cat_risk.cat_events
+                FROM {default_catalog}.{default_schema}.cat_events
                 ORDER BY event_name
             """
             cursor.execute(query)
             events = cursor.fetchall()
+            print("EVENTS:", events)
             events = [event.event_name for event in events]
             # print(catalogs)
         return events
 
 def get_event_details(event_name):
     DATABRICKS_SERVER_HOSTNAME = get_databricks_server_hostname()
-    DATABRICKS_TOKEN = get_databricks_token()
+    DATABRICKS_TOKEN = get_databricks_sp_token()
     with sql.connect(
         http_path=f"/sql/1.0/warehouses/{DATABRICKS_WAREHOUSE_ID}",
         server_hostname=DATABRICKS_SERVER_HOSTNAME,
@@ -384,7 +402,7 @@ def get_event_details(event_name):
         with connection.cursor() as cursor:
             query = f"""
                 SELECT *
-                FROM timo.cat_risk.cat_events
+                FROM {default_catalog}.{default_schema}.cat_events
                 WHERE event_name = '{event_name}'
             """
             cursor.execute(query)
@@ -395,7 +413,7 @@ def get_event_details(event_name):
 
 def get_affected_properties(event_name=None):
     DATABRICKS_SERVER_HOSTNAME = get_databricks_server_hostname()
-    DATABRICKS_TOKEN = get_databricks_token()
+    DATABRICKS_TOKEN = get_databricks_sp_token()
     with sql.connect(
         http_path=f"/sql/1.0/warehouses/{DATABRICKS_WAREHOUSE_ID}",
         server_hostname=DATABRICKS_SERVER_HOSTNAME,
@@ -409,7 +427,7 @@ def get_affected_properties(event_name=None):
                        CASE WHEN ST_CONTAINS(ST_GEOMFROMTEXT('{event_wkt}'), ST_POINT(lon, lat)) THEN property_value * 0.75 ELSE property_value * 0.25 END as property_payout,
                        ST_CONTAINS(ST_GEOMFROMTEXT('{event_wkt}'), ST_POINT(lon, lat)) as core_polygon,
                        ST_CONTAINS(ST_GEOMFROMTEXT('{buffer_wkt}'), ST_POINT(lon, lat)) as secondary_polygon
-                FROM timo.cat_risk.portfolio
+                FROM {default_catalog}.{default_schema}.portfolio
                 WHERE ST_CONTAINS(ST_GEOMFROMTEXT('{buffer_wkt}'), ST_POINT(lon, lat))
             """
             cursor.execute(query)
@@ -508,24 +526,26 @@ def create_legend(deciles):
 def zoom_to_h3_resolution(zoom):
     if zoom < 4:
         return 3
-    elif zoom < 8:
+    elif zoom == 5:
+        return 3
+    elif zoom == 6:
         return 4
-    elif zoom < 10:
+    elif zoom == 7:
+        return 4
+    elif zoom == 8:
         return 5
-    elif zoom < 12:
+    elif zoom == 9:
         return 6
-    elif zoom < 13:
+    elif zoom == 10:
+        return 6
+    elif zoom == 11:
         return 7
+    elif zoom == 12:
+        return 8
+    elif zoom == 13:
+        return 8
     else:
         return 8
-    # elif zoom < 14:
-    #     return 8
-    # elif zoom < 16:
-    #     return 8
-    # elif zoom < 17:
-    #     return 8
-    # else:
-    #     return 8
     
 def bounds_to_wkt(bounds):
     # Input bounds: [southwest, northeast] in (lat, lon)
@@ -655,7 +675,7 @@ deciles = create_linear_color_scale(np.linspace(0.0, 1.0, 11))
 legend = create_legend(deciles)
 
 def data_to_polygons(map_data, catastrophe_type=None):
-    print("map_data:", map_data)
+    # print("map_data:", map_data)
     hex_centers_lats = []
     hex_centers_lngs = []
     hex_boundaries_polygons = []
@@ -718,37 +738,127 @@ app.layout = html.Div(
         dcc.Store(id='active-draft-message', data=None),
         dcc.Store(id='selected-portfolio-id', data=None),
         dcc.Store(id='overlay-visible', data=False),
-        dcc.Store(id='genie-conversation-id', data=None),
-        dcc.Store(id='genie-messages', data=[]),
-        # Add dropdown selection controls at the top
+        dcc.Store(id='nav-collapsed', data=True),
+        dcc.Store(id='active-page', data='map'),
+        # Navigation Menu
         html.Div(
-            [
+            id='nav-menu',
+            children=[
                 html.Div(
                     [
-                        html.Label("Catastrophe Type:", style={"color": "#FFFFFF", "fontFamily": "Helvetica", "fontWeight": "bold", "marginRight": "10px"}),
-                        dcc.Dropdown(
-                            id="catastrophe-dropdown",
-                            placeholder="Loading default...",
-                            style={"width": "200px", "backgroundColor": "#FFFFFF", "fontFamily": "Helvetica", "color": "#3A3A3A"},
-                            options=catastrophe_types,
-                            value=default_catastrophe_type
+                        html.Div(
+                            "☰",
+                            id="nav-toggle",
+                            style={
+                                "fontSize": "24px",
+                                "cursor": "pointer",
+                                "padding": "10px",
+                                "color": "#FFFFFF",
+                                "textAlign": "left",
+                                "borderBottom": "1px solid #4A4A4A"
+                            }
+                        ),
+                        html.Div(
+                            [
+                                html.Div(
+                                    [
+                                        html.Img(src="/assets/pinOutlinedIcon-light.svg", style={"marginRight": "10px", "width": "16px", "height": "16px"}),
+                                        html.Span("Interactive Map", id="map-nav-text")
+                                    ],
+                                    id="map-nav-item",
+                                    n_clicks=0,
+                                    style={
+                                        "padding": "15px",
+                                        "cursor": "pointer",
+                                        "color": "#FFFFFF",
+                                        "backgroundColor": "#4A4A4A",
+                                        "borderBottom": "1px solid #3A3A3A",
+                                        "display": "flex",
+                                        "alignItems": "center"
+                                    }
+                                ),
+                                html.Div(
+                                    [
+                                        html.Img(src="/assets/dashboardIcon-light.svg", style={"marginRight": "10px", "width": "16px", "height": "16px"}),
+                                        html.Span("Dashboard", id="dashboard-nav-text")
+                                    ],
+                                    id="dashboard-nav-item",
+                                    n_clicks=0,
+                                    style={
+                                        "padding": "15px",
+                                        "cursor": "pointer",
+                                        "color": "#FFFFFF",
+                                        "backgroundColor": "#3A3A3A",
+                                        "borderBottom": "1px solid #3A3A3A",
+                                        "display": "flex",
+                                        "alignItems": "center"
+                                    }
+                                )
+                            ]
                         )
-                    ],
-                    style={"display": "inline-block", "marginRight": "20px"}
-                ),
-                html.Div(
-                    [
-                        html.Label("Event:", style={"color": "#FFFFFF", "fontFamily": "Helvetica","fontWeight": "bold", "marginRight": "10px"}),
-                        dcc.Dropdown(
-                            id="event-dropdown",
-                            placeholder="Select an event...",
-                            disabled=False,
-                            style={"width": "200px", "backgroundColor": "#FFFFFF", "fontFamily": "Helvetica", "color": "#3A3A3A"},
-                        )
-                    ],
-                    style={"display": "inline-block", "marginRight": "20px"}
-                ),
+                    ]
+                )
             ],
+            style={
+                "position": "fixed",
+                "left": "0",
+                "top": "0",
+                "height": "100vh",
+                "width": "250px",
+                "backgroundColor": "#2C2C2C",
+                "zIndex": "10001",
+                "transition": "transform 0.3s ease",
+                "boxShadow": "2px 0 5px rgba(0,0,0,0.3)",
+                "fontFamily": "Helvetica"
+            }
+        ),
+        # Map content container
+        html.Div(
+            children=[
+                # Title
+                html.Div(
+                    "Peril Predicts: Parametric Payouts",
+                    style={
+                        "fontSize": "28px",
+                        "fontWeight": "bold",
+                        "color": "#FFFFFF",
+                        "fontFamily": "Helvetica",
+                        "textAlign": "left",
+                        "padding": "20px",
+                        "paddingLeft": "30px",
+                        "backgroundColor": "#2C2C2C",
+                        "marginBottom": "0px"
+                    }
+                ),
+                # Add dropdown selection controls at the top
+                html.Div(
+                    [
+                        html.Div(
+                            [
+                                html.Label("Catastrophe Type:", style={"color": "#FFFFFF", "fontFamily": "Helvetica", "fontWeight": "bold", "marginRight": "10px"}),
+                                dcc.Dropdown(
+                                    id="catastrophe-dropdown",
+                                    placeholder="Loading default...",
+                                    style={"width": "200px", "backgroundColor": "#FFFFFF", "fontFamily": "Helvetica", "color": "#3A3A3A"},
+                                    options=catastrophe_types,
+                                    value=default_catastrophe_type
+                                )
+                            ],
+                            style={"display": "inline-block", "marginRight": "20px"}
+                        ),
+                        html.Div(
+                            [
+                                html.Label("Event:", style={"color": "#FFFFFF", "fontFamily": "Helvetica","fontWeight": "bold", "marginRight": "10px"}),
+                                dcc.Dropdown(
+                                    id="event-dropdown",
+                                    placeholder="Select an event...",
+                                    disabled=False,
+                                    style={"width": "200px", "backgroundColor": "#FFFFFF", "fontFamily": "Helvetica", "color": "#3A3A3A"},
+                                )
+                            ],
+                            style={"display": "inline-block", "marginRight": "20px"}
+                        ),
+                    ],
             style={
                 "backgroundColor": "#3A3A3A",
                 "padding": "15px",
@@ -756,10 +866,10 @@ app.layout = html.Div(
                 # "marginBottom": "20px",
                 "boxShadow": "0 2px 4px rgba(0,0,0,0.3)"
             }
-        ),
-        # Two column layout for map and property list
-        html.Div(
-            [
+                ),
+                # Two column layout for map and property list
+                html.Div(
+                    [
                 # Left column - Map (75%)
                 html.Div(
                     [
@@ -883,15 +993,15 @@ app.layout = html.Div(
                             }
                         )
                     ],
-                    style={"width": "25%", "display": "inline-block", "verticalAlign": "top"}
+                        style={"width": "25%", "display": "inline-block", "verticalAlign": "top"}
+                    ),
+                ],
+                style={"display": "flex", "width": "100%"}
                 ),
-            ],
-            style={"display": "flex", "width": "100%"}
-        ),
-        # Portfolio Analysis Overlay
-        html.Div(
-            id="portfolio-analysis-overlay",
-            children=[
+                # Portfolio Analysis Overlay
+                html.Div(
+                    id="portfolio-analysis-overlay",
+                    children=[
                 html.Div(
                     [
                         # Header with close button
@@ -933,19 +1043,13 @@ app.layout = html.Div(
                         # Content area with dashboard and chat
                         html.Div(
                             [
-                                # Left side - Dashboard iframe
+                                # Scrollable container for all content
                                 html.Div(
                                     [
-                                        html.H4("Dashboard View", 
-                                               style={
-                                                   "color": "#FFFFFF",
-                                                   "fontFamily": "Helvetica",
-                                                   "marginBottom": "10px"
-                                               }),
-                                        # Scrollable container for dashboard content
+                                        # Top row: Images (left) and AI/Email (right)
                                         html.Div(
                                             [
-                                                # Property Images box
+                                                # Left side - Property Images (50%)
                                                 html.Div(
                                                     [
                                                         html.H5("Property Images",
@@ -1024,216 +1128,147 @@ app.layout = html.Div(
                                                         )
                                                     ],
                                                     style={
-                                                        "marginBottom": "15px",
+                                                        "width": "48%",
                                                         "padding": "15px",
                                                         "backgroundColor": "#2C2C2C",
                                                         "borderRadius": "6px",
                                                         "border": "1px solid #4A4A4A"
                                                     }
                                                 ),
-                                                # AI Assessment box
+                                                # Right side - AI Assessment and Draft Email stacked (50%)
                                                 html.Div(
                                                     [
-                                                        html.Button(
-                                                            "🤖 AI Assessment",
-                                                            id="dashboard-ai-assessment-btn",
-                                                            n_clicks=0,
+                                                        # AI Assessment box
+                                                        html.Div(
+                                                            [
+                                                                html.Button(
+                                                                    "🤖 AI Assessment",
+                                                                    id="dashboard-ai-assessment-btn",
+                                                                    n_clicks=0,
+                                                                    style={
+                                                                        "backgroundColor": "#4A4A4A",
+                                                                        "color": "#FFFFFF",
+                                                                        "padding": "8px 16px",
+                                                                        "border": "1px solid #5A5A5A",
+                                                                        "borderRadius": "4px",
+                                                                        "fontFamily": "Helvetica",
+                                                                        "fontSize": "12px",
+                                                                        "fontWeight": "bold",
+                                                                        "cursor": "pointer",
+                                                                        "width": "100%",
+                                                                        "transition": "background-color 0.2s ease",
+                                                                        "marginBottom": "10px"
+                                                                    }
+                                                                ),
+                                                                html.Div(
+                                                                    id="dashboard-ai-assessment-text",
+                                                                    style={
+                                                                        "display": "none",
+                                                                        "padding": "10px",
+                                                                        "backgroundColor": "#1A1A1A",
+                                                                        "borderRadius": "4px",
+                                                                        "border": "1px solid #5A5A5A",
+                                                                        "color": "#FFFFFF",
+                                                                        "fontFamily": "Helvetica",
+                                                                        "fontSize": "12px",
+                                                                        "lineHeight": "1.5",
+                                                                        "whiteSpace": "pre-wrap"
+                                                                    }
+                                                                )
+                                                            ],
                                                             style={
-                                                                "backgroundColor": "#4A4A4A",
-                                                                "color": "#FFFFFF",
-                                                                "padding": "8px 16px",
-                                                                "border": "1px solid #5A5A5A",
-                                                                "borderRadius": "4px",
-                                                                "fontFamily": "Helvetica",
-                                                                "fontSize": "12px",
-                                                                "fontWeight": "bold",
-                                                                "cursor": "pointer",
-                                                                "width": "100%",
-                                                                "transition": "background-color 0.2s ease",
-                                                                "marginBottom": "10px"
+                                                                "marginBottom": "15px",
+                                                                "padding": "15px",
+                                                                "backgroundColor": "#2C2C2C",
+                                                                "borderRadius": "6px",
+                                                                "border": "1px solid #4A4A4A"
                                                             }
                                                         ),
+                                                        # Draft Email box
                                                         html.Div(
-                                                            id="dashboard-ai-assessment-text",
+                                                            [
+                                                                html.Button(
+                                                                    "✉️ Draft Email",
+                                                                    id="dashboard-draft-email-btn",
+                                                                    n_clicks=0,
+                                                                    style={
+                                                                        "backgroundColor": "#4A4A4A",
+                                                                        "color": "#FFFFFF",
+                                                                        "padding": "8px 16px",
+                                                                        "border": "1px solid #5A5A5A",
+                                                                        "borderRadius": "4px",
+                                                                        "fontFamily": "Helvetica",
+                                                                        "fontSize": "12px",
+                                                                        "fontWeight": "bold",
+                                                                        "cursor": "pointer",
+                                                                        "width": "100%",
+                                                                        "transition": "background-color 0.2s ease",
+                                                                        "marginBottom": "10px"
+                                                                    }
+                                                                ),
+                                                                html.Div(
+                                                                    id="dashboard-draft-email-text",
+                                                                    style={
+                                                                        "display": "none",
+                                                                        "padding": "10px",
+                                                                        "backgroundColor": "#1A1A1A",
+                                                                        "borderRadius": "4px",
+                                                                        "border": "1px solid #5A5A5A",
+                                                                        "color": "#FFFFFF",
+                                                                        "fontFamily": "Helvetica",
+                                                                        "fontSize": "12px",
+                                                                        "lineHeight": "1.5",
+                                                                        "whiteSpace": "pre-wrap"
+                                                                    }
+                                                                )
+                                                            ],
                                                             style={
-                                                                "display": "none",
-                                                                "padding": "10px",
-                                                                "backgroundColor": "#1A1A1A",
-                                                                "borderRadius": "4px",
-                                                                "border": "1px solid #5A5A5A",
-                                                                "color": "#FFFFFF",
-                                                                "fontFamily": "Helvetica",
-                                                                "fontSize": "12px",
-                                                                "lineHeight": "1.5",
-                                                                "whiteSpace": "pre-wrap"
+                                                                "padding": "15px",
+                                                                "backgroundColor": "#2C2C2C",
+                                                                "borderRadius": "6px",
+                                                                "border": "1px solid #4A4A4A"
                                                             }
                                                         )
                                                     ],
                                                     style={
-                                                        "marginBottom": "15px",
-                                                        "padding": "15px",
-                                                        "backgroundColor": "#2C2C2C",
-                                                        "borderRadius": "6px",
-                                                        "border": "1px solid #4A4A4A"
+                                                        "width": "48%",
+                                                        "display": "flex",
+                                                        "flexDirection": "column"
                                                     }
-                                                ),
-                                                # Draft Email box
-                                                html.Div(
-                                                    [
-                                                        html.Button(
-                                                            "✉️ Draft Email",
-                                                            id="dashboard-draft-email-btn",
-                                                            n_clicks=0,
-                                                            style={
-                                                                "backgroundColor": "#4A4A4A",
-                                                                "color": "#FFFFFF",
-                                                                "padding": "8px 16px",
-                                                                "border": "1px solid #5A5A5A",
-                                                                "borderRadius": "4px",
-                                                                "fontFamily": "Helvetica",
-                                                                "fontSize": "12px",
-                                                                "fontWeight": "bold",
-                                                                "cursor": "pointer",
-                                                                "width": "100%",
-                                                                "transition": "background-color 0.2s ease",
-                                                                "marginBottom": "10px"
-                                                            }
-                                                        ),
-                                                        html.Div(
-                                                            id="dashboard-draft-email-text",
-                                                            style={
-                                                                "display": "none",
-                                                                "padding": "10px",
-                                                                "backgroundColor": "#1A1A1A",
-                                                                "borderRadius": "4px",
-                                                                "border": "1px solid #5A5A5A",
-                                                                "color": "#FFFFFF",
-                                                                "fontFamily": "Helvetica",
-                                                                "fontSize": "12px",
-                                                                "lineHeight": "1.5",
-                                                                "whiteSpace": "pre-wrap"
-                                                            }
-                                                        )
-                                                    ],
-                                                    style={
-                                                        "marginBottom": "15px",
-                                                        "padding": "15px",
-                                                        "backgroundColor": "#2C2C2C",
-                                                        "borderRadius": "6px",
-                                                        "border": "1px solid #4A4A4A"
-                                                    }
-                                                ),
-                                                # Dashboard iframe
+                                                )
+                                            ],
+                                            style={
+                                                "display": "flex",
+                                                "justifyContent": "space-between",
+                                                "width": "100%",
+                                                "marginBottom": "20px"
+                                            }
+                                        ),
+                                        # Bottom row: Dashboard iframe (full width)
+                                        html.Div(
+                                            [
                                                 html.Iframe(
-                                                    id="dashboard-iframe",
-                                                    src="https://e2-demo-field-eng.cloud.databricks.com/embed/dashboardsv3/01f0920e08aa11e08a822686b5ab9f57?o=1444828305810485",  # Will be set dynamically or via config
+                                                    id="dashboard-iframe-overlay",
+                                                    src="",  # Will be set dynamically via callback
                                                     style={
                                                         "width": "100%",
-                                                        "height": "400px",
+                                                        "height": "600px",
                                                         "border": "1px solid #4A4A4A",
                                                         "borderRadius": "4px"
                                                     }
                                                 )
                                             ],
                                             style={
-                                                "maxHeight": "calc(80vh - 100px)",
-                                                "overflowY": "auto",
-                                                "overflowX": "hidden",
-                                                "paddingRight": "10px"
+                                                "width": "100%"
                                             }
                                         )
                                     ],
                                     style={
-                                        "width": "60%",
-                                        "display": "inline-block",
-                                        "verticalAlign": "top",
-                                        "paddingRight": "15px"
-                                    }
-                                ),
-                                # Right side - Genie chat interface
-                                html.Div(
-                                    [
-                                        html.H4("AI Assistant (Genie)", 
-                                               style={
-                                                   "color": "#FFFFFF",
-                                                   "fontFamily": "Helvetica",
-                                                   "marginBottom": "10px"
-                                               }),
-                                        html.Div(
-                                            id="genie-chat-history",
-                                            children=[
-                                                html.Div(
-                                                    "Ask a question about your portfolio data...",
-                                                    style={
-                                                        "color": "#CCCCCC",
-                                                        "fontFamily": "Helvetica",
-                                                        "fontSize": "12px",
-                                                        "fontStyle": "italic",
-                                                        "padding": "20px",
-                                                        "textAlign": "center"
-                                                    }
-                                                )
-                                            ],
-                                            style={
-                                                "height": "calc(80vh - 220px)",
-                                                "overflowY": "auto",
-                                                "backgroundColor": "#1A1A1A",
-                                                "border": "1px solid #4A4A4A",
-                                                "borderRadius": "4px",
-                                                "padding": "15px",
-                                                "marginBottom": "10px"
-                                            }
-                                        ),
-                                        html.Div(
-                                            [
-                                                dcc.Input(
-                                                    id="genie-input",
-                                                    type="text",
-                                                    placeholder="Type your question here...",
-                                                    style={
-                                                        "width": "calc(100% - 90px)",
-                                                        "padding": "10px",
-                                                        "backgroundColor": "#2C2C2C",
-                                                        "color": "#FFFFFF",
-                                                        "border": "1px solid #4A4A4A",
-                                                        "borderRadius": "4px",
-                                                        "fontFamily": "Helvetica",
-                                                        "fontSize": "12px",
-                                                        "marginRight": "10px"
-                                                    }
-                                                ),
-                                                dbc.Button(
-                                                    "Send",
-                                                    id="genie-send-btn",
-                                                    style={
-                                                        "width": "80px",
-                                                        "backgroundColor": "#4CAF50",
-                                                        "color": "#FFFFFF",
-                                                        "border": "1px solid #4CAF50",
-                                                        "borderRadius": "4px",
-                                                        "fontFamily": "Helvetica",
-                                                        "fontSize": "12px",
-                                                        "fontWeight": "bold",
-                                                        "cursor": "pointer"
-                                                    }
-                                                )
-                                            ],
-                                            style={
-                                                "display": "flex",
-                                                "alignItems": "center"
-                                            }
-                                        ),
-                                        dcc.Loading(
-                                            id="genie-loading",
-                                            type="circle",
-                                            children=html.Div(id="genie-loading-output"),
-                                            color="#4CAF50"
-                                        )
-                                    ],
-                                    style={
-                                        "width": "40%",
-                                        "display": "inline-block",
-                                        "verticalAlign": "top"
+                                        "maxHeight": "calc(80vh - 20px)",
+                                        "overflowY": "auto",
+                                        "overflowX": "hidden",
+                                        "paddingRight": "10px",
+                                        "width": "100%"
                                     }
                                 )
                             ],
@@ -1267,6 +1302,49 @@ app.layout = html.Div(
                 "zIndex": "10000",
                 "justifyContent": "center",
                 "alignItems": "center"
+                }
+                )
+            ],  # End of map content children
+            id='map-content',
+            style={
+                "marginLeft": "250px",
+                "transition": "margin-left 0.3s ease",
+                "width": "calc(100% - 250px)"
+            }
+        ),
+        # Dashboard content container
+        html.Div(
+            id='dashboard-content',
+            children=[
+                # Title
+                html.Div(
+                    "Peril Predicts: Parametric Payouts",
+                    style={
+                        "fontSize": "28px",
+                        "fontWeight": "bold",
+                        "color": "#FFFFFF",
+                        "fontFamily": "Helvetica",
+                        "textAlign": "left",
+                        "padding": "20px",
+                        "paddingLeft": "30px",
+                        "backgroundColor": "#2C2C2C"
+                    }
+                ),
+                html.Iframe(
+                    id='dashboard-iframe',
+                    src=DASHBOARD_URL if DASHBOARD_URL else "",
+                    style={
+                        "width": "100%",
+                        "height": "calc(100vh - 68px)",
+                        "border": "none"
+                    }
+                )
+            ],
+            style={
+                "display": "none",
+                "marginLeft": "250px",
+                "transition": "margin-left 0.3s ease",
+                "width": "calc(100% - 250px)"
             }
         )
     ],
@@ -1324,6 +1402,7 @@ def update_map(n_clicks, center, zoom, bounds, catastrophe_type): #, event_name,
             global_center = {'lat': global_center[0], 'lng': global_center[1]}
         print(f"Global Center: {global_center}, Global Zoom: {global_zoom}, Global Bounds: {global_bounds}")
 
+        print(f"Global Zoom: {global_zoom}")
         resolution = zoom_to_h3_resolution(global_zoom)
 
         # Fetch new data
@@ -2122,7 +2201,14 @@ def update_draft_message_response(n_intervals, active_property_id, text_ids):
 # Callback to show/hide property analysis overlay and store selected property
 @app.callback(
     [Output('portfolio-analysis-overlay', 'style'),
-     Output('clicked-property', 'data')],
+     Output('clicked-property', 'data'),
+     Output('dashboard-ai-assessment-text', 'children', allow_duplicate=True),
+     Output('dashboard-ai-assessment-text', 'style', allow_duplicate=True),
+     Output('dashboard-draft-email-text', 'children', allow_duplicate=True),
+     Output('dashboard-draft-email-text', 'style', allow_duplicate=True),
+     Output('property-image-original-container', 'children', allow_duplicate=True),
+     Output('property-image-damaged-container', 'children', allow_duplicate=True),
+     Output('dashboard-iframe-overlay', 'src', allow_duplicate=True)],
     [Input({'type': 'property-analysis-btn', 'index': ALL}, 'n_clicks'),
      Input('close-portfolio-analysis-btn', 'n_clicks')],
     [State('portfolio-analysis-overlay', 'style')],
@@ -2133,7 +2219,7 @@ def toggle_property_analysis_overlay(property_btn_clicks, close_clicks, current_
     ctx = callback_context
     
     if not ctx.triggered:
-        return no_update, no_update
+        return no_update, no_update, no_update, no_update, no_update, no_update, no_update, no_update, no_update
     
     triggered_prop = ctx.triggered[0]['prop_id']
     
@@ -2165,6 +2251,20 @@ def toggle_property_analysis_overlay(property_btn_clicks, close_clicks, current_
         "alignItems": "center"
     }
     
+    # Hidden style for text elements
+    hidden_text_style = {
+        "display": "none",
+        "padding": "10px",
+        "backgroundColor": "#1A1A1A",
+        "borderRadius": "4px",
+        "border": "1px solid #5A5A5A",
+        "color": "#FFFFFF",
+        "fontFamily": "Helvetica",
+        "fontSize": "12px",
+        "lineHeight": "1.5",
+        "whiteSpace": "pre-wrap"
+    }
+    
     # Check if a property analysis button was clicked
     if 'property-analysis-btn' in triggered_prop:
         # Make sure a button was actually clicked, not just created
@@ -2176,14 +2276,15 @@ def toggle_property_analysis_overlay(property_btn_clicks, close_clicks, current_
             button_id_str = triggered_prop.split('.')[0]
             button_id = json.loads(button_id_str)
             property_id = button_id['index']
-            return visible_style, property_id
+            # Return visible style, property ID, and clear all content (including iframe)
+            return visible_style, property_id, "", hidden_text_style, "", hidden_text_style, [], [], ""
         else:
             # Buttons were just created, don't open overlay
-            return no_update, no_update
+            return no_update, no_update, no_update, no_update, no_update, no_update, no_update, no_update, no_update
     elif 'close-portfolio-analysis-btn' in triggered_prop:
-        return hidden_style, no_update
+        return hidden_style, no_update, no_update, no_update, no_update, no_update, no_update, no_update, no_update
     
-    return no_update, no_update
+    return no_update, no_update, no_update, no_update, no_update, no_update, no_update, no_update, no_update
 
 # Callback to update property images (original and damaged) based on selected property
 @app.callback(
@@ -2227,7 +2328,7 @@ def update_property_images(property_id, property_data):
     app_directory = os.path.dirname(os.path.abspath(__file__))
     original_file_exists = os.path.exists(os.path.join(app_directory, f"assets/images/{property_id}.png"))
     damaged_file_exists = os.path.exists(os.path.join(app_directory, f"assets/images/{property_id}_damaged.png"))
-    
+
     # Create original image component or placeholder
     if original_file_exists:
         original_content = html.Img(
@@ -2239,7 +2340,22 @@ def update_property_images(property_id, property_data):
             }
         )
     else:
-        original_content = no_image_text
+        import random
+        images_dir = os.path.join(app_directory, "assets/images")
+        all_image_files = [f for f in os.listdir(images_dir) if f.endswith(".png") and not f.endswith("_damaged.png")]
+        if all_image_files:
+            random_original_file = random.choice(all_image_files)
+            random_original_image_path = f"/assets/images/{random_original_file}"
+            original_content = html.Img(
+                src=random_original_image_path,
+                style={
+                    "width": "100%",
+                    "borderRadius": "4px",
+                    "border": "1px solid #5A5A5A"
+                }
+            )
+        else:
+            original_content = no_image_text
     
     # Create damaged image component or placeholder
     if damaged_file_exists:
@@ -2252,23 +2368,32 @@ def update_property_images(property_id, property_data):
             }
         )
     else:
-        damaged_content = no_image_text
+        if random_original_image_path:
+            random_damaged_image_path = random_original_image_path.replace(".png", "_damaged.png")
+            damaged_content = html.Img(
+                src=random_damaged_image_path,
+                style={
+                    "width": "100%",
+                    "borderRadius": "4px",
+                    "border": "1px solid #5A5A5A"
+                }
+            )
+        else:
+            damaged_content = no_image_text
     
     return original_content, damaged_content
 
-# Callback to start dashboard AI Assessment streaming
+# Callback to update dashboard iframe URL with portfolio-id and property-id parameters
 @app.callback(
-    Output("dashboard-interval-ai", "disabled"),
-    [Input('dashboard-ai-assessment-btn', 'n_clicks')],
-    [State('clicked-property', 'data'),
-     State('property-data-store', 'data'),
-     State('event-dropdown', 'value')],
+    Output('dashboard-iframe-overlay', 'src'),
+    [Input('clicked-property', 'data')],
+    [State('property-data-store', 'data')],
     prevent_initial_call=True
 )
-def start_dashboard_ai_assessment(n_clicks, property_id, property_data, event_name):
-    """Start streaming AI Assessment for dashboard view"""
-    if not n_clicks or not property_id or not property_data:
-        return True
+def update_dashboard_iframe_url(property_id, property_data):
+    """Update dashboard iframe URL with portfolio-id and property-id query parameters"""
+    if not property_id or not property_data or not DASHBOARD_URL:
+        return ""
     
     # Find the clicked property data
     clicked_property_data = None
@@ -2278,19 +2403,60 @@ def start_dashboard_ai_assessment(n_clicks, property_id, property_data, event_na
             break
     
     if not clicked_property_data:
-        return True
+        return ""
+    
+    # Extract portfolio_id and property_id
+    portfolio_id = clicked_property_data.get('portfolio_id', '')
+    
+    # Build the URL with query parameters
+    # Format: &f_a6b2965b~portfolio-id=1&f_a6b2965b~property-id-1=314115730
+    url_params = f"&f_a6b2965b~portfolio-id={portfolio_id}&f_a6b2965b~property-id-1={property_id}"
+    
+    # Append to the base dashboard URL
+    if '?' in DASHBOARD_URL:
+        full_url = f"{DASHBOARD_URL}{url_params}"
+    else:
+        full_url = f"{DASHBOARD_URL}?{url_params[1:]}"  # Remove leading &
+    
+    return full_url
+
+# Callback to start dashboard AI Assessment streaming
+@app.callback(
+    [Output("dashboard-interval-ai", "disabled"),
+     Output("dashboard-ai-assessment-btn", "disabled")],
+    [Input('dashboard-ai-assessment-btn', 'n_clicks')],
+    [State('clicked-property', 'data'),
+     State('property-data-store', 'data'),
+     State('event-dropdown', 'value')],
+    prevent_initial_call=True
+)
+def start_dashboard_ai_assessment(n_clicks, property_id, property_data, event_name):
+    """Start streaming AI Assessment for dashboard view"""
+    if not n_clicks or not property_id or not property_data:
+        return True, False
+    
+    # Find the clicked property data
+    clicked_property_data = None
+    for prop in property_data:
+        if str(prop['property_id']) == str(property_id):
+            clicked_property_data = prop
+            break
+    
+    if not clicked_property_data:
+        return True, False
     
     # Start streaming in a thread
     model = os.getenv("LLM_ENDPOINT")
     threading.Thread(target=fmapi_stream_ai_assessment, args=(get_databricks_sp_token(), get_databricks_server_hostname(), model, clicked_property_data, event_name,)).start()
     print("Starting dashboard AI assessment stream")
-    return False  # Enable interval
+    return False, True  # Enable interval, disable button
 
 # Callback to update dashboard AI Assessment text from stream
 @app.callback(
     [Output('dashboard-ai-assessment-text', 'children'),
      Output('dashboard-ai-assessment-text', 'style'),
-     Output("dashboard-interval-ai", "disabled", allow_duplicate=True)],
+     Output("dashboard-interval-ai", "disabled", allow_duplicate=True),
+     Output("dashboard-ai-assessment-btn", "disabled", allow_duplicate=True)],
     [Input("dashboard-interval-ai", "n_intervals")],
     prevent_initial_call=True
 )
@@ -2311,19 +2477,22 @@ def update_dashboard_ai_assessment(n_intervals):
         "lineHeight": "1.5",
         "whiteSpace": "pre-wrap"
     }
-    
+
+    # print("RESPONSE LIST:", response_list)
+    # print("STREAM COMPLETE:", stream_complete)
     if not stream_complete:
         # Stream is in progress
-        current_text = "".join([x for x in response_list if x is not None])
-        return current_text, visible_style, False  # Keep interval enabled
+        current_text = "".join([x for x in response_list if x is not None and isinstance(x, str)])
+        return current_text, visible_style, False, True  # Keep interval enabled, button disabled
     else:
         # Stream is complete
-        final_text = "".join([x for x in response_list if x is not None])
-        return final_text, visible_style, True  # Disable interval
+        final_text = "".join([x for x in response_list if x is not None and isinstance(x, str)])
+        return final_text, visible_style, True, False  # Disable interval, enable button
 
 # Callback to start dashboard Draft Email streaming
 @app.callback(
-    Output("dashboard-interval-email", "disabled"),
+    [Output("dashboard-interval-email", "disabled"),
+     Output("dashboard-draft-email-btn", "disabled")],
     [Input('dashboard-draft-email-btn', 'n_clicks')],
     [State('clicked-property', 'data'),
      State('property-data-store', 'data'),
@@ -2333,7 +2502,7 @@ def update_dashboard_ai_assessment(n_intervals):
 def start_dashboard_draft_email(n_clicks, property_id, property_data, event_name):
     """Start streaming Draft Email for dashboard view"""
     if not n_clicks or not property_id or not property_data:
-        return True
+        return True, False
     
     # Find the clicked property data
     clicked_property_data = None
@@ -2343,19 +2512,20 @@ def start_dashboard_draft_email(n_clicks, property_id, property_data, event_name
             break
     
     if not clicked_property_data:
-        return True
+        return True, False
     
     # Start streaming in a thread
     model = os.getenv("LLM_ENDPOINT")
     threading.Thread(target=fmapi_stream_draft_message, args=(get_databricks_sp_token(), get_databricks_server_hostname(), model, clicked_property_data, event_name,)).start()
     print("Starting dashboard draft email stream")
-    return False  # Enable interval
+    return False, True  # Enable interval, disable button
 
 # Callback to update dashboard Draft Email text from stream
 @app.callback(
     [Output('dashboard-draft-email-text', 'children'),
      Output('dashboard-draft-email-text', 'style'),
-     Output("dashboard-interval-email", "disabled", allow_duplicate=True)],
+     Output("dashboard-interval-email", "disabled", allow_duplicate=True),
+     Output("dashboard-draft-email-btn", "disabled", allow_duplicate=True)],
     [Input("dashboard-interval-email", "n_intervals")],
     prevent_initial_call=True
 )
@@ -2379,166 +2549,169 @@ def update_dashboard_draft_email(n_intervals):
     
     if not draft_message_stream_complete:
         # Stream is in progress
-        current_text = "".join([x for x in draft_message_response_list if x is not None])
-        return current_text, visible_style, False  # Keep interval enabled
+        current_text = "".join([x for x in draft_message_response_list if x is not None and isinstance(x, str)])
+        return current_text, visible_style, False, True  # Keep interval enabled, button disabled
     else:
         # Stream is complete
-        final_text = "".join([x for x in draft_message_response_list if x is not None])
-        return final_text, visible_style, True  # Disable interval
+        final_text = "".join([x for x in draft_message_response_list if x is not None and isinstance(x, str)])
+        return final_text, visible_style, True, False  # Disable interval, enable button
 
-# Callback to handle Genie chat interactions
+# Navigation callbacks
 @app.callback(
-    [Output('genie-chat-history', 'children'),
-     Output('genie-conversation-id', 'data'),
-     Output('genie-messages', 'data'),
-     Output('genie-input', 'value'),
-     Output('genie-loading-output', 'children')],
-    [Input('genie-send-btn', 'n_clicks'),
-     Input('genie-input', 'n_submit')],
-    [State('genie-input', 'value'),
-     State('genie-conversation-id', 'data'),
-     State('genie-messages', 'data'),
-     State('genie-chat-history', 'children')],
+    Output('nav-collapsed', 'data'),
+    Input('nav-toggle', 'n_clicks'),
+    State('nav-collapsed', 'data'),
     prevent_initial_call=True
 )
-def handle_genie_chat(send_clicks, n_submit, user_input, conversation_id, messages, current_history):
-    """Handle Genie chat interactions using Databricks Genie API"""
-    from databricks.sdk import WorkspaceClient
+def toggle_nav(n_clicks, is_collapsed):
+    """Toggle navigation menu collapsed state"""
+    return not is_collapsed
+
+@app.callback(
+    [Output('nav-menu', 'style'),
+     Output('map-content', 'style'),
+     Output('dashboard-content', 'style', allow_duplicate=True)],
+    Input('nav-collapsed', 'data'),
+    State('active-page', 'data'),
+    prevent_initial_call='initial_duplicate'
+)
+def update_nav_style(is_collapsed, active_page):
+    """Update navigation menu and content styles based on collapsed state"""
+    if is_collapsed:
+        nav_style = {
+            "position": "fixed",
+            "left": "0",
+            "top": "0",
+            "height": "100vh",
+            "width": "60px",
+            "backgroundColor": "#2C2C2C",
+            "zIndex": "10001",
+            "transition": "width 0.3s ease",
+            "boxShadow": "2px 0 5px rgba(0,0,0,0.3)",
+            "fontFamily": "Helvetica",
+            "overflow": "hidden"
+        }
+        map_style = {
+            "marginLeft": "60px",
+            "transition": "margin-left 0.3s ease",
+            "width": "calc(100% - 60px)",
+            "display": "block" if active_page == 'map' else "none"
+        }
+        dashboard_style = {
+            "display": "block" if active_page == 'dashboard' else "none",
+            "marginLeft": "60px",
+            "transition": "margin-left 0.3s ease",
+            "width": "calc(100% - 60px)"
+        }
+    else:
+        nav_style = {
+            "position": "fixed",
+            "left": "0",
+            "top": "0",
+            "height": "100vh",
+            "width": "250px",
+            "backgroundColor": "#2C2C2C",
+            "zIndex": "10001",
+            "transition": "width 0.3s ease",
+            "boxShadow": "2px 0 5px rgba(0,0,0,0.3)",
+            "fontFamily": "Helvetica"
+        }
+        map_style = {
+            "marginLeft": "250px",
+            "transition": "margin-left 0.3s ease",
+            "width": "calc(100% - 250px)",
+            "display": "block" if active_page == 'map' else "none"
+        }
+        dashboard_style = {
+            "display": "block" if active_page == 'dashboard' else "none",
+            "marginLeft": "250px",
+            "transition": "margin-left 0.3s ease",
+            "width": "calc(100% - 250px)"
+        }
     
-    if not user_input or user_input.strip() == "":
-        return no_update, no_update, no_update, no_update, ""
+    return nav_style, map_style, dashboard_style
+
+@app.callback(
+    Output('active-page', 'data'),
+    [Input('map-nav-item', 'n_clicks'),
+     Input('dashboard-nav-item', 'n_clicks')],
+    prevent_initial_call=True
+)
+def switch_page(map_clicks, dashboard_clicks):
+    """Switch between map and dashboard pages"""
+    ctx = callback_context
+    if not ctx.triggered:
+        return 'map'
     
-    try:
-        w = WorkspaceClient()
-        # TODO: Replace with your actual Genie space ID
-        # You can get this from the Genie UI URL as rooms/SPACE-ID?o=
-        genie_space_id = os.getenv("GENIE_SPACE_ID", "YOUR_GENIE_SPACE_ID")
-        
-        # Initialize chat history if it's the default message
-        if len(current_history) == 1 and isinstance(current_history[0], dict):
-            chat_messages = []
-        else:
-            chat_messages = list(current_history) if current_history else []
-        
-        # Add user message to chat
-        user_message_div = html.Div(
-            [
-                html.Strong("You: ", style={"color": "#4CAF50"}),
-                html.Span(user_input, style={"color": "#FFFFFF"})
-            ],
-            style={
-                "marginBottom": "15px",
-                "padding": "10px",
-                "backgroundColor": "#2C2C2C",
-                "borderRadius": "4px",
-                "borderLeft": "3px solid #4CAF50",
-                "fontFamily": "Helvetica",
-                "fontSize": "12px"
-            }
-        )
-        chat_messages.append(user_message_div)
-        
-        # Process Genie response
-        if conversation_id is None:
-            # Start new conversation
-            response = w.genie.start_conversation_and_wait(genie_space_id, user_input)
-            conversation_id = response.conversation_id
-        else:
-            # Continue existing conversation
-            response = w.genie.create_message_and_wait(
-                genie_space_id, conversation_id, user_input
-            )
-        
-        # Process response attachments
-        response_text = ""
-        for attachment in response.attachments:
-            if attachment.text:
-                response_text += attachment.text.content + "\n"
-            elif attachment.query:
-                response_text += f"{attachment.query.description}\n\n"
-                # Optionally, fetch and display query results
-                if response.query_result and response.query_result.statement_id:
-                    try:
-                        result = w.statement_execution.get_statement(response.query_result.statement_id)
-                        if result.result and result.result.data_array:
-                            # Format data as a simple table
-                            columns = [col.name for col in result.manifest.schema.columns]
-                            response_text += f"Query Results:\nColumns: {', '.join(columns)}\n"
-                            response_text += f"Rows returned: {len(result.result.data_array)}\n"
-                    except Exception as e:
-                        response_text += f"[Error fetching query results: {str(e)}]\n"
-        
-        if not response_text:
-            response_text = "I received your question but couldn't generate a response. Please try rephrasing."
-        
-        # Add Genie response to chat
-        genie_message_div = html.Div(
-            [
-                html.Strong("Genie: ", style={"color": "#2196F3"}),
-                html.Span(response_text, style={"color": "#FFFFFF", "whiteSpace": "pre-wrap"})
-            ],
-            style={
-                "marginBottom": "15px",
-                "padding": "10px",
-                "backgroundColor": "#1A1A1A",
-                "borderRadius": "4px",
-                "borderLeft": "3px solid #2196F3",
-                "fontFamily": "Helvetica",
-                "fontSize": "12px"
-            }
-        )
-        chat_messages.append(genie_message_div)
-        
-        # Update messages store
-        if messages is None:
-            messages = []
-        messages.append({"role": "user", "content": user_input})
-        messages.append({"role": "assistant", "content": response_text})
-        
-        return chat_messages, conversation_id, messages, "", ""
-        
-    except Exception as e:
-        error_message = html.Div(
-            [
-                html.Strong("Error: ", style={"color": "#FF4444"}),
-                html.Span(f"Failed to communicate with Genie: {str(e)}", style={"color": "#FFFFFF"})
-            ],
-            style={
-                "marginBottom": "15px",
-                "padding": "10px",
-                "backgroundColor": "#3A1A1A",
-                "borderRadius": "4px",
-                "borderLeft": "3px solid #FF4444",
-                "fontFamily": "Helvetica",
-                "fontSize": "12px"
-            }
-        )
-        
-        # Keep the user message and add error
-        if len(current_history) == 1 and isinstance(current_history[0], dict):
-            chat_messages = []
-        else:
-            chat_messages = list(current_history) if current_history else []
-        
-        user_message_div = html.Div(
-            [
-                html.Strong("You: ", style={"color": "#4CAF50"}),
-                html.Span(user_input, style={"color": "#FFFFFF"})
-            ],
-            style={
-                "marginBottom": "15px",
-                "padding": "10px",
-                "backgroundColor": "#2C2C2C",
-                "borderRadius": "4px",
-                "borderLeft": "3px solid #4CAF50",
-                "fontFamily": "Helvetica",
-                "fontSize": "12px"
-            }
-        )
-        chat_messages.append(user_message_div)
-        chat_messages.append(error_message)
-        
-        return chat_messages, conversation_id, messages, "", ""
+    button_id = ctx.triggered[0]['prop_id'].split('.')[0]
+    
+    if button_id == 'map-nav-item':
+        return 'map'
+    elif button_id == 'dashboard-nav-item':
+        return 'dashboard'
+    
+    return 'map'
+
+@app.callback(
+    [Output('map-content', 'style', allow_duplicate=True),
+     Output('dashboard-content', 'style', allow_duplicate=True),
+     Output('map-nav-item', 'style'),
+     Output('dashboard-nav-item', 'style'),
+     Output('map-nav-text', 'style'),
+     Output('dashboard-nav-text', 'style')],
+    [Input('active-page', 'data'),
+     Input('nav-collapsed', 'data')],
+    prevent_initial_call='initial_duplicate'
+)
+def update_page_display(active_page, is_collapsed):
+    """Update page display and navigation highlighting based on active page"""
+    margin = "60px" if is_collapsed else "250px"
+    width = f"calc(100% - {margin})"
+    
+    # Content styles
+    map_style = {
+        "display": "block" if active_page == 'map' else "none",
+        "marginLeft": margin,
+        "transition": "margin-left 0.3s ease",
+        "width": width
+    }
+    dashboard_style = {
+        "display": "block" if active_page == 'dashboard' else "none",
+        "marginLeft": margin,
+        "transition": "margin-left 0.3s ease",
+        "width": width
+    }
+    
+    # Navigation item styles
+    active_nav_style = {
+        "padding": "15px",
+        "cursor": "pointer",
+        "color": "#FFFFFF",
+        "backgroundColor": "#4A4A4A",
+        "borderBottom": "1px solid #3A3A3A",
+        "display": "flex",
+        "alignItems": "center",
+        "borderLeft": "4px solid #4CAF50"
+    }
+    inactive_nav_style = {
+        "padding": "15px",
+        "cursor": "pointer",
+        "color": "#FFFFFF",
+        "backgroundColor": "#3A3A3A",
+        "borderBottom": "1px solid #3A3A3A",
+        "display": "flex",
+        "alignItems": "center",
+        "borderLeft": "4px solid transparent"
+    }
+    
+    # Text styles for collapsed state
+    text_style_visible = {"display": "inline"}
+    text_style_hidden = {"display": "none" if is_collapsed else "inline"}
+    
+    if active_page == 'map':
+        return map_style, dashboard_style, active_nav_style, inactive_nav_style, text_style_hidden, text_style_hidden
+    else:
+        return map_style, dashboard_style, inactive_nav_style, active_nav_style, text_style_hidden, text_style_hidden
 
 if __name__ == "__main__":
     app.run(debug=True)

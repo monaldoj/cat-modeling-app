@@ -4,24 +4,21 @@ resources:
       name: "cat-modeling-app"
       source_code_path: ../app
       description: "A leaflet app for modeling catastrophies geopsatially on Databricks."
-      # budget_policy_id: "4635ae18-e8d8-4528-98d3-05805c7e6308" #"${var.budget_policy_id}"
+      config:
+        env:
+          - name: "DASHBOARD_URL"
+            value: "${var.DASHBOARD_URL}"
       resources:
         - name: "sql-warehouse"
           description: "A SQL warehouse for app to be able to work with"
           sql_warehouse:
-            id: "d6d89fb9fd47b835" # "${var.sql_warehouse_id}"
+            id: "${var.SQL_WAREHOUSE_ID}" # "d6d89fb9fd47b835" # "${var.sql_warehouse_id}"
             permission: "CAN_USE"
         - name: "serving-endpoint"
           description: "A serving endpoint for app to be able to work with"
           serving_endpoint:
-            name: "databricks-llama-4-maverick" # "${var.serving_endpoint_id}"
+            name: "${var.SERVING_ENDPOINT_NAME}" # "databricks-llama-4-maverick" # "${var.serving_endpoint_id}"
             permission: "CAN_QUERY"
-        # - name: "DATABRICKS_TOKEN"
-        #   description: "A Databricks token for app to be able to work with"
-        #   secret:
-        #     scope: "justinm-gcp-secrets"
-        #     key: "fe_pat"
-        #     permission: "READ"
-      user_api_scopes:
-        - sql
+      # user_api_scopes:
+      #   - sql
 
