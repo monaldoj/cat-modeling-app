@@ -8,6 +8,7 @@ env:
 - name: "LLM_ENDPOINT"
   valueFrom: "serving-endpoint"
 - name: "DASHBOARD_URL"
-  valueFrom: "dashboard-url"
+  value: "https://e2-demo-west.cloud.databricks.com/embed/dashboardsv3/01f0f95f81f216c8b96f295f1b948a2c?o=2556758628403379"
+  # valueFrom: "DASHBOARD_URL"
 # - name: "DATABRICKS_TOKEN"
 #   valueFrom: "DATABRICKS_TOKEN"
