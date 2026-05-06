@@ -124,9 +124,9 @@ def get_databricks_server_hostname():
         DATABRICKS_SERVER_HOSTNAME = cfg.host
     return DATABRICKS_SERVER_HOSTNAME
 
-def get_databricks_sp_token():
+def get_databricks_sp_token(force_refresh: bool = False):
     global global_databricks_sp_token
-    if global_databricks_sp_token:
+    if global_databricks_sp_token and not force_refresh:
         return global_databricks_sp_token
     else:
         DATABRICKS_TOKEN = os.getenv("DATABRICKS_TOKEN")
@@ -169,21 +169,28 @@ def get_databricks_sp_token():
 
 def sqlQuery(query: str) -> pd.DataFrame:
     """Execute a SQL query and return the result as a pandas DataFrame."""
-    # print("RUNNING QUERY:", query)
     DATABRICKS_SERVER_HOSTNAME = get_databricks_server_hostname()
-    DATABRICKS_TOKEN = get_databricks_sp_token()
-    with sql.connect(
-        http_path=f"/sql/1.0/warehouses/{DATABRICKS_WAREHOUSE_ID}",
-        server_hostname=DATABRICKS_SERVER_HOSTNAME,
-        access_token=DATABRICKS_TOKEN
-    ) as connection:
-        print("CONNECTION MADE")
-        with connection.cursor() as cursor:
-            cursor.execute(query)
-            columns = [desc[0] for desc in cursor.description]
-            rows = cursor.fetchall()
-            df = pd.DataFrame(rows, columns=columns)
-        return df
+    for attempt in range(2):
+        DATABRICKS_TOKEN = get_databricks_sp_token(force_refresh=attempt > 0)
+        try:
+            with sql.connect(
+                http_path=f"/sql/1.0/warehouses/{DATABRICKS_WAREHOUSE_ID}",
+                server_hostname=DATABRICKS_SERVER_HOSTNAME,
+                access_token=DATABRICKS_TOKEN
+            ) as connection:
+                print("CONNECTION MADE")
+                print("sqlQuery() query:", query)
+                with connection.cursor() as cursor:
+                    cursor.execute(query)
+                    columns = [desc[0] for desc in cursor.description]
+                    rows = cursor.fetchall()
+                    df = pd.DataFrame(rows, columns=columns)
+                return df
+        except Exception:
+            if attempt == 0:
+                print("sqlQuery() failed, forcing Databricks SP token refresh and retrying.")
+                continue
+            raise
 
 def fmapi_stream_ai_assessment(token, host, model, clicked_property_data, event_name):
     global response_list
@@ -353,7 +360,7 @@ def get_data(catastrophe_type=None, resolution=9, bounds=None, column_resolution
                     FROM cell_agg
                     -- ORDER BY value DESC
         """
-        print(query)
+        # print(query)
         data = sqlQuery(query)
         # print(data.head())
         # Convert any ndarray columns to lists
@@ -372,69 +379,91 @@ def get_data(catastrophe_type=None, resolution=9, bounds=None, column_resolution
 
 def get_events():
     DATABRICKS_SERVER_HOSTNAME = get_databricks_server_hostname()
-    DATABRICKS_TOKEN = get_databricks_sp_token()
-    with sql.connect(
-        http_path=f"/sql/1.0/warehouses/{DATABRICKS_WAREHOUSE_ID}",
-        server_hostname=DATABRICKS_SERVER_HOSTNAME,
-        access_token=DATABRICKS_TOKEN
-    ) as connection:
-        with connection.cursor() as cursor:
-            query = f"""
-                SELECT DISTINCT event_name
-                FROM {default_catalog}.{default_schema}.cat_events
-                ORDER BY event_name
-            """
-            cursor.execute(query)
-            events = cursor.fetchall()
-            print("EVENTS:", events)
-            events = [event.event_name for event in events]
-            # print(catalogs)
-        return events
+    for attempt in range(2):
+        DATABRICKS_TOKEN = get_databricks_sp_token(force_refresh=attempt > 0)
+        try:
+            with sql.connect(
+                http_path=f"/sql/1.0/warehouses/{DATABRICKS_WAREHOUSE_ID}",
+                server_hostname=DATABRICKS_SERVER_HOSTNAME,
+                access_token=DATABRICKS_TOKEN
+            ) as connection:
+                with connection.cursor() as cursor:
+                    query = f"""
+                        SELECT DISTINCT event_name
+                        FROM {default_catalog}.{default_schema}.cat_events
+                        ORDER BY event_name
+                    """
+                    print("get_events() query:", query)
+                    cursor.execute(query)
+                    events = cursor.fetchall()
+                    print("EVENTS:", events)
+                    events = [event.event_name for event in events]
+                return events
+        except Exception:
+            if attempt == 0:
+                print("get_events() failed, forcing Databricks SP token refresh and retrying.")
+                continue
+            raise
 
 def get_event_details(event_name):
     DATABRICKS_SERVER_HOSTNAME = get_databricks_server_hostname()
-    DATABRICKS_TOKEN = get_databricks_sp_token()
-    with sql.connect(
-        http_path=f"/sql/1.0/warehouses/{DATABRICKS_WAREHOUSE_ID}",
-        server_hostname=DATABRICKS_SERVER_HOSTNAME,
-        access_token=DATABRICKS_TOKEN
-    ) as connection:
-        with connection.cursor() as cursor:
-            query = f"""
-                SELECT *
-                FROM {default_catalog}.{default_schema}.cat_events
-                WHERE event_name = '{event_name}'
-            """
-            cursor.execute(query)
-            events = cursor.fetchall()
-            event_details = [event.wkt for event in events][0]
-            # print(catalogs)
-        return event_details
+    for attempt in range(2):
+        DATABRICKS_TOKEN = get_databricks_sp_token(force_refresh=attempt > 0)
+        try:
+            with sql.connect(
+                http_path=f"/sql/1.0/warehouses/{DATABRICKS_WAREHOUSE_ID}",
+                server_hostname=DATABRICKS_SERVER_HOSTNAME,
+                access_token=DATABRICKS_TOKEN
+            ) as connection:
+                with connection.cursor() as cursor:
+                    query = f"""
+                        SELECT *
+                        FROM {default_catalog}.{default_schema}.cat_events
+                        WHERE event_name = '{event_name}'
+                    """
+                    print("get_event_details() query:", query)
+                    cursor.execute(query)
+                    events = cursor.fetchall()
+                    event_details = [event.wkt for event in events][0]
+                return event_details
+        except Exception:
+            if attempt == 0:
+                print("get_event_details() failed, forcing Databricks SP token refresh and retrying.")
+                continue
+            raise
 
 def get_affected_properties(event_name=None):
     DATABRICKS_SERVER_HOSTNAME = get_databricks_server_hostname()
-    DATABRICKS_TOKEN = get_databricks_sp_token()
-    with sql.connect(
-        http_path=f"/sql/1.0/warehouses/{DATABRICKS_WAREHOUSE_ID}",
-        server_hostname=DATABRICKS_SERVER_HOSTNAME,
-        access_token=DATABRICKS_TOKEN
-    ) as connection:
-        with connection.cursor() as cursor:
-            event_wkt = get_event_details(event_name)
-            buffer_wkt = create_buffer_polygon(event_wkt, 20, units="miles")
-            query = f"""
-                SELECT portfolio_id, id as property_id, property_value, name, lat, lon, housenumber, street, city, state, postcode,
-                       CASE WHEN ST_CONTAINS(ST_GEOMFROMTEXT('{event_wkt}'), ST_POINT(lon, lat)) THEN property_value * 0.75 ELSE property_value * 0.25 END as property_payout,
-                       ST_CONTAINS(ST_GEOMFROMTEXT('{event_wkt}'), ST_POINT(lon, lat)) as core_polygon,
-                       ST_CONTAINS(ST_GEOMFROMTEXT('{buffer_wkt}'), ST_POINT(lon, lat)) as secondary_polygon
-                FROM {default_catalog}.{default_schema}.portfolio
-                WHERE ST_CONTAINS(ST_GEOMFROMTEXT('{buffer_wkt}'), ST_POINT(lon, lat))
-            """
-            cursor.execute(query)
-            results = cursor.fetchall()
-            columns = [desc[0] for desc in cursor.description]
-            df = pd.DataFrame(results, columns=columns)
-        return df
+    for attempt in range(2):
+        DATABRICKS_TOKEN = get_databricks_sp_token(force_refresh=attempt > 0)
+        try:
+            with sql.connect(
+                http_path=f"/sql/1.0/warehouses/{DATABRICKS_WAREHOUSE_ID}",
+                server_hostname=DATABRICKS_SERVER_HOSTNAME,
+                access_token=DATABRICKS_TOKEN
+            ) as connection:
+                with connection.cursor() as cursor:
+                    event_wkt = get_event_details(event_name)
+                    buffer_wkt = create_buffer_polygon(event_wkt, 20, units="miles")
+                    query = f"""
+                        SELECT portfolio_id, id as property_id, property_value, name, lat, lon, housenumber, street, city, state, postcode,
+                               CASE WHEN ST_CONTAINS(ST_GEOMFROMTEXT('{event_wkt}'), ST_POINT(lon, lat)) THEN property_value * 0.75 ELSE property_value * 0.25 END as property_payout,
+                               ST_CONTAINS(ST_GEOMFROMTEXT('{event_wkt}'), ST_POINT(lon, lat)) as core_polygon,
+                               ST_CONTAINS(ST_GEOMFROMTEXT('{buffer_wkt}'), ST_POINT(lon, lat)) as secondary_polygon
+                        FROM {default_catalog}.{default_schema}.portfolio
+                        WHERE ST_CONTAINS(ST_GEOMFROMTEXT('{buffer_wkt}'), ST_POINT(lon, lat))
+                    """
+                    print("get_affected_properties() query:", query)
+                    cursor.execute(query)
+                    results = cursor.fetchall()
+                    columns = [desc[0] for desc in cursor.description]
+                    df = pd.DataFrame(results, columns=columns)
+                return df
+        except Exception:
+            if attempt == 0:
+                print("get_affected_properties() failed, forcing Databricks SP token refresh and retrying.")
+                continue
+            raise
 
 def style_function(value, deciles):
     fill_color = '#FFFFFF'  # default white
